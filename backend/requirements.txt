@@ -7,8 +7,7 @@ torchaudio==2.8.0
 transformers==4.52.0
 nemo-toolkit[asr]==2.4.0
 RealtimeSTT==0.3.104
-RealtimeTTS==0.5.7
-realtimetts[azure]==1.45.0
+RealtimeTTS[azure]==0.5.7
 
 librosa==0.10.1
 soundfile==0.13.1

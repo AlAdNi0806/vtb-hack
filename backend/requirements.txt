@@ -8,7 +8,7 @@ torch==2.8.0
 torchaudio==2.8.0
 transformers==4.35.0
 nemo-toolkit[asr]==1.22.0
-RealtimeSTT==0.1.19
+RealtimeSTT==0.3.104
 RealtimeTTS==0.3.20
 openai-whisper==20231117
 

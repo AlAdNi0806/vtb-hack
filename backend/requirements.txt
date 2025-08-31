@@ -4,8 +4,8 @@ uvicorn[standard]==0.24.0
 websockets==12.0
 
 # AI Models and Processing
-torch==2.1.0
-torchaudio==2.1.0
+torch==2.8.0
+torchaudio==2.8.0
 transformers==4.35.0
 nemo-toolkit[asr]==1.22.0
 silero==0.4.1

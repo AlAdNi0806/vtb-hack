@@ -136,9 +136,7 @@ class AudioProcessor:
                 enable_realtime_transcription=True,
                 realtime_processing_pause=0.02,
                 silero_sensitivity=0.05,
-                webrtc_sensitivity=3,
-                post_speech_silence_duration=0.3,
-                min_length_of_recording=0.3,
+                webrtc_sensitivity=3
             )
 
             # Set up callbacks for streaming transcription

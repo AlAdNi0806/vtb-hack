@@ -5,7 +5,7 @@ websockets==15.0.1
 torch==2.8.0
 torchaudio==2.8.0
 transformers==4.36.0
-nemo-toolkit[asr]==1.22.0
+nemo-toolkit[asr]==2.4.0
 RealtimeSTT==0.3.104
 RealtimeTTS==0.5.7
 
@@ -18,7 +18,7 @@ httpx==0.25.2
 requests==2.31.0
 
 python-dotenv==1.0.0
-pydantic==2.5.0
+pydantic==2.11.1
 pydantic-settings==2.1.0
 
 numpy==1.23.5

@@ -15,7 +15,15 @@ from typing import Optional, Dict, Any, List, Callable
 import librosa
 import soundfile as sf
 from RealtimeSTT import AudioToTextRecorder
-import nemo.collections.asr as nemo_asr
+
+# Try to import NeMo, but make it optional
+try:
+    import nemo.collections.asr as nemo_asr
+    NEMO_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"NeMo not available: {e}")
+    nemo_asr = None
+    NEMO_AVAILABLE = False
 
 from config import settings
 from utils.logger import setup_logger
@@ -73,6 +81,11 @@ class AudioProcessor:
     async def _initialize_parakeet_model(self):
         """Initialize Parakeet-1.1b RNNT multilingual ASR model"""
         try:
+            if not NEMO_AVAILABLE:
+                logger.warning("NeMo not available, skipping Parakeet model...")
+                await self._initialize_whisper_fallback()
+                return
+
             logger.info("Loading Parakeet-1.1b RNNT multilingual ASR model...")
 
             # Load Parakeet model from NVIDIA NeMo

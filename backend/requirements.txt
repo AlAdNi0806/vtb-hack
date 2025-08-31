@@ -21,7 +21,7 @@ python-dotenv==1.0.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
 
-numpy==1.24.3
+numpy==1.23.5
 scipy==1.11.4
 asyncio==3.4.3
 aiofiles==23.2.1

@@ -56,8 +56,10 @@ class AIService:
                 timeout=30.0
             )
 
-            # Test Cerebras connection
-            await self._test_cerebras_connection()
+            # Test Cerebras connection (non-blocking)
+            cerebras_available = await self._test_cerebras_connection()
+            if not cerebras_available:
+                logger.warning("Cerebras API not available - responses will use fallback")
 
             # Initialize RealtimeTTS
             await self._initialize_realtime_tts()
@@ -67,7 +69,9 @@ class AIService:
 
         except Exception as e:
             logger.error(f"Failed to initialize AI Service: {e}")
-            raise
+            # Don't raise - allow system to start with limited functionality
+            logger.warning("AI Service starting with limited functionality")
+            self._ready = True
     
     async def _test_cerebras_connection(self):
         """Test connection to Cerebras API"""
@@ -82,10 +86,11 @@ class AIService:
             )
             response.raise_for_status()
             logger.info("Cerebras API connection successful")
-            
+            return True
+
         except Exception as e:
             logger.error(f"Cerebras API connection failed: {e}")
-            raise
+            return False
     
     async def _initialize_realtime_tts(self):
         """Initialize RealtimeTTS for streaming speech synthesis"""
@@ -117,7 +122,6 @@ class AIService:
             logger.info("Loading Silero TTS as fallback...")
 
             # Load Silero TTS model
-            import silero
             self.tts_model, _ = torch.hub.load(
                 repo_or_dir='snakers4/silero-models',
                 model='silero_tts',
@@ -150,46 +154,83 @@ class AIService:
             self.audio_callback(chunk)
     
     async def generate_response(self, user_input: str) -> str:
-        """Generate AI response using Cerebras LLM"""
+        """Generate AI response using Cerebras LLM or fallback"""
         try:
             # Add user input to conversation history
             self.conversation_history.append({"role": "user", "content": user_input})
-            
-            # Prepare messages for Cerebras API
-            messages = [{"role": "system", "content": self.system_prompt}]
-            
-            # Add recent conversation history (keep last 10 exchanges)
-            recent_history = self.conversation_history[-20:]  # Last 10 user-assistant pairs
-            messages.extend(recent_history)
-            
-            # Call Cerebras API
-            response = await self.cerebras_client.post(
-                "/chat/completions",
-                json={
-                    "model": settings.CEREBRAS_MODEL,
-                    "messages": messages,
-                    "max_tokens": 150,  # Keep responses concise for voice conversation
-                    "temperature": 0.7,
-                    "top_p": 0.9,
-                    "stream": False
-                }
-            )
-            
-            response.raise_for_status()
-            result = response.json()
-            
-            # Extract AI response
-            ai_response = result["choices"][0]["message"]["content"].strip()
-            
+
+            # Try Cerebras API first
+            if self.cerebras_client:
+                try:
+                    ai_response = await self._generate_with_cerebras(user_input)
+                    if ai_response:
+                        return ai_response
+                except Exception as e:
+                    logger.warning(f"Cerebras API failed: {e}")
+
+            # Fallback to simple response
+            ai_response = self._generate_fallback_response(user_input)
+
             # Add AI response to conversation history
             self.conversation_history.append({"role": "assistant", "content": ai_response})
-            
+
             logger.info(f"Generated AI response: {ai_response[:100]}...")
             return ai_response
-            
+
         except Exception as e:
             logger.error(f"Error generating AI response: {e}")
             return "I'm sorry, I'm having trouble processing your request right now."
+
+    async def _generate_with_cerebras(self, user_input: str = None) -> str:
+        """Generate response using Cerebras API"""
+        # Prepare messages for Cerebras API
+        messages = [{"role": "system", "content": self.system_prompt}]
+
+        # Add recent conversation history (keep last 10 exchanges)
+        recent_history = self.conversation_history[-20:]  # Last 10 user-assistant pairs
+        messages.extend(recent_history)
+
+        # Call Cerebras API
+        response = await self.cerebras_client.post(
+            "/chat/completions",
+            json={
+                "model": settings.CEREBRAS_MODEL,
+                "messages": messages,
+                "max_tokens": 150,  # Keep responses concise for voice conversation
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "stream": False
+            }
+        )
+
+        response.raise_for_status()
+        result = response.json()
+
+        # Extract AI response
+        ai_response = result["choices"][0]["message"]["content"].strip()
+
+        # Add AI response to conversation history
+        self.conversation_history.append({"role": "assistant", "content": ai_response})
+
+        return ai_response
+
+    def _generate_fallback_response(self, user_input: str) -> str:
+        """Generate a simple fallback response when Cerebras is not available"""
+        # Simple rule-based responses for testing
+        user_lower = user_input.lower()
+
+        if "hello" in user_lower or "hi" in user_lower:
+            return "Hello! I'm here to help you. How can I assist you today?"
+        elif "how are you" in user_lower:
+            return "I'm doing well, thank you for asking! How are you doing?"
+        elif "what" in user_lower and "name" in user_lower:
+            return "I'm your AI assistant. I'm here to help with any questions you might have."
+        elif "bye" in user_lower or "goodbye" in user_lower:
+            return "Goodbye! It was nice talking with you. Have a great day!"
+        elif "thank" in user_lower:
+            return "You're welcome! I'm happy to help."
+        else:
+            return f"I heard you say: '{user_input}'. I'm currently running in fallback mode, but I'm still here to chat with you!"
     
     async def text_to_speech(self, text: str, streaming: bool = True) -> str:
         """Convert text to speech using RealtimeTTS or fallback"""

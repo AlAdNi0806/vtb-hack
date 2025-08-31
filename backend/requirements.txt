@@ -11,7 +11,7 @@ RealtimeTTS==0.5.7
 
 librosa==0.10.1
 soundfile==0.13.1
-pyaudio==0.2.11
+pyaudio==0.2.14
 webrtcvad==2.0.10
 
 httpx==0.25.2

@@ -12,6 +12,7 @@ from enum import Enum
 from services.audio_processor import AudioProcessor
 from services.ai_service import AIService
 from utils.logger import setup_logger
+from config import settings
 
 logger = setup_logger(__name__)
 
@@ -160,20 +161,22 @@ class AudioPipeline:
             
             # Generate AI response
             ai_response = await self.ai_service.generate_response(user_input)
-            
+
             # Update state
             self.state = ConversationState.RESPONDING
-            
-            # Generate TTS audio
-            tts_audio = await self.ai_service.text_to_speech(ai_response)
-            
+
+            # Generate TTS audio with streaming if enabled
+            streaming_enabled = getattr(settings, 'ENABLE_STREAMING_TTS', True)
+            tts_audio = await self.ai_service.text_to_speech(ai_response, streaming=streaming_enabled)
+
             # Return to listening state
             self.state = ConversationState.LISTENING
-            
+
             return {
                 "ai_response": ai_response,
                 "tts_audio": tts_audio,
-                "processing_complete": True
+                "processing_complete": True,
+                "streaming_used": streaming_enabled
             }
             
         except Exception as e:

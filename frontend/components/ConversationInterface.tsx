@@ -67,8 +67,9 @@ export default function ConversationInterface({
               setMessages(prev => [...prev, userMessage])
               setCurrentTranscript('')
             } else {
-              // Update current transcript
-              setCurrentTranscript(data.text)
+              // Update current transcript (partial or streaming)
+              const transcriptText = data.text || data.partial_transcript || ''
+              setCurrentTranscript(transcriptText)
             }
             break
             

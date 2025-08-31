@@ -27,15 +27,29 @@ class Settings(BaseSettings):
     # Model Configuration
     STT_MODEL_PATH: str = Field(
         default="nvidia/parakeet-1.1b-rnnt-multilingual-asr",
-        description="Speech-to-text model path"
+        description="Speech-to-text model path (Parakeet-1.1b)"
     )
     TTS_MODEL_PATH: str = Field(
-        default="silero_tts",
-        description="Text-to-speech model path"
+        default="realtime_tts",
+        description="Text-to-speech model path (RealtimeTTS)"
     )
     TURN_DETECTOR_MODEL_PATH: str = Field(
         default="livekit/turn-detector",
         description="Turn detector model path"
+    )
+
+    # Streaming Configuration
+    ENABLE_STREAMING_STT: bool = Field(
+        default=True,
+        description="Enable streaming speech-to-text"
+    )
+    ENABLE_STREAMING_TTS: bool = Field(
+        default=True,
+        description="Enable streaming text-to-speech"
+    )
+    STREAMING_CHUNK_SIZE: int = Field(
+        default=512,
+        description="Streaming audio chunk size"
     )
     
     # Logging

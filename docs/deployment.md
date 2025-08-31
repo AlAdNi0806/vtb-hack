@@ -88,6 +88,8 @@ source venv/bin/activate
 #### Install Python Dependencies
 ```bash
 pip install --upgrade pip
+# Wheels
+pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 
 # Install PyTorch with CUDA support (if GPU available)

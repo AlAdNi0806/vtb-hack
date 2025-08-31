@@ -12,7 +12,7 @@ import httpx
 import torch
 import torchaudio
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from RealtimeTTS import TextToAudioStream, SystemEngine, AzureEngine, ElevenlabsEngine
+from RealtimeTTS import TextToAudioStream, SystemEngine
 
 from config import settings
 from utils.logger import setup_logger

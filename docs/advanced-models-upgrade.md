@@ -183,7 +183,7 @@ MIN_STREAMING_DURATION = 0.3
 ENABLE_STREAMING_TTS = True
 
 # RealtimeTTS engine selection
-TTS_ENGINE = "system"  # Options: system, azure, elevenlabs
+TTS_ENGINE = "system"
 TTS_VOICE = "default"
 
 # Streaming parameters

@@ -1,0 +1,42 @@
+# Web Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+websockets==12.0
+
+# AI Models and Processing
+torch==2.1.0
+torchaudio==2.1.0
+transformers==4.35.0
+nemo-toolkit[asr]==1.22.0
+silero==0.4.1
+openai-whisper==20231117
+
+# Audio Processing
+librosa==0.10.1
+soundfile==1.0.4
+pyaudio==0.2.11
+webrtcvad==2.0.10
+
+# HTTP Client for APIs
+httpx==0.25.2
+requests==2.31.0
+
+# Environment and Configuration
+python-dotenv==1.0.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Utilities
+numpy==1.24.3
+scipy==1.11.4
+asyncio==3.4.3
+aiofiles==23.2.1
+
+# Logging and Monitoring
+loguru==0.7.2
+
+# Development
+pytest==7.4.3
+pytest-asyncio==0.21.1
+black==23.11.0
+flake8==6.1.0

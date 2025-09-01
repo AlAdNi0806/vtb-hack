@@ -11,11 +11,13 @@ import signal
 import multiprocessing
 
 # Set environment variables before importing any ML libraries
-os.environ["CUDA_VISIBLE_DEVICES"] = ""  # Disable CUDA
+os.environ["CUDA_VISIBLE_DEVICES"] = ""  # Disable CUDA completely
 os.environ["OMP_NUM_THREADS"] = "1"  # Limit OpenMP threads
 os.environ["MKL_NUM_THREADS"] = "1"  # Limit MKL threads
 os.environ["NUMBA_DISABLE_CUDA"] = "1"  # Disable NUMBA CUDA
 os.environ["TORCH_USE_CUDA_DSA"] = "0"  # Disable CUDA DSA
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"  # Limit CUDA memory
+os.environ["NEMO_CACHE_DIR"] = "/tmp/nemo_cache"  # Set NeMo cache directory
 
 # Configure multiprocessing to avoid semaphore leaks
 multiprocessing.set_start_method('spawn', force=True)

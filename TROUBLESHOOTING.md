@@ -2,7 +2,46 @@
 
 ## Common Issues and Solutions
 
-### 1. Backend Crashes with "Aborted (core dumped)"
+### 1. CUDA Out of Memory Error
+
+**Symptoms:**
+- "CUDA out of memory" error when loading Parakeet model
+- GPU memory exhausted
+- Falls back to RealtimeSTT model
+
+**Solutions:**
+
+#### Option A: Use CPU-Only Startup Script (Recommended)
+```bash
+cd backend
+chmod +x start_cpu_only.sh
+./start_cpu_only.sh
+```
+
+#### Option B: Use the Safe Startup Script
+```bash
+cd backend
+python3 start_backend_safe.py
+```
+
+#### Option C: Set Environment Variables Manually
+```bash
+export CUDA_VISIBLE_DEVICES=""
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMBA_DISABLE_CUDA=1
+export TORCH_USE_CUDA_DSA=0
+export PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:128"
+python3 main.py
+```
+
+#### Option D: Install CPU-only PyTorch
+```bash
+pip uninstall torch torchaudio
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+```
+
+### 2. Backend Crashes with "Aborted (core dumped)"
 
 **Symptoms:**
 - Server starts but crashes when processing audio
@@ -10,28 +49,8 @@
 - Memory leaks and semaphore warnings
 
 **Solutions:**
-
-#### Option A: Use the Safe Startup Script
-```bash
-cd backend
-python3 start_backend_safe.py
-```
-
-#### Option B: Set Environment Variables Manually
-```bash
-export CUDA_VISIBLE_DEVICES=""
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export NUMBA_DISABLE_CUDA=1
-export TORCH_USE_CUDA_DSA=0
-python3 main.py
-```
-
-#### Option C: Install CPU-only PyTorch
-```bash
-pip uninstall torch torchaudio
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-```
+- Use the CPU-only startup script above
+- Ensure all CUDA processes are killed before starting
 
 ### 2. Parakeet Model Authentication Error
 

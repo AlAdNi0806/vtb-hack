@@ -44,21 +44,38 @@ class AudioProcessor:
         self._initialize_fallback()
 
     def _initialize_parakeet(self):
-        """Initialize the Parakeet multilingual ASR model"""
+        """Initialize the Parakeet multilingual ASR model with CPU fallback"""
         try:
             logger.info("Loading parakeet-1.1b-rnnt-multilingual-asr model...")
 
             import nemo.collections.asr as nemo_asr
+            import torch
+
+            # Force CPU usage to avoid CUDA memory issues
+            device = "cpu"
+            logger.info(f"Using device: {device} for Parakeet model")
+
+            # Clear any existing CUDA cache
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
             # Load the parakeet model using the correct model name
             self.parakeet_model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained(
-                model_name="nvidia/parakeet-rnnt-1.1b"
+                model_name="nvidia/parakeet-rnnt-1.1b",
+                map_location=device  # Force CPU
             )
+
+            # Move model to CPU explicitly
+            self.parakeet_model = self.parakeet_model.to(device)
 
             # Set to evaluation mode
             self.parakeet_model.eval()
 
-            logger.info("✅ Parakeet model loaded successfully!")
+            # Disable gradients to save memory
+            for param in self.parakeet_model.parameters():
+                param.requires_grad = False
+
+            logger.info("✅ Parakeet model loaded successfully on CPU!")
             self.use_parakeet = True
 
         except Exception as e:

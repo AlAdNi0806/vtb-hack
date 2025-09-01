@@ -59,17 +59,20 @@ export function SpeechToTextApp() {
     }
 
     const ws = new WebSocket(`ws://${PYTHON_BACKEND_URL}/ws/${clientIdRef.current}`);
-    
+
     ws.onopen = () => {
       console.log("WebSocket connected");
       setIsConnected(true);
       setError(null);
+
+      // Send initial ping to establish connection
+      ws.send(JSON.stringify({ type: "ping" }));
     };
 
     ws.onmessage = (event) => {
       try {
         const data: TranscriptionMessage = JSON.parse(event.data);
-        
+
         if (data.type === "transcription") {
           if (data.is_final) {
             // Final transcription - add to main text
@@ -81,15 +84,31 @@ export function SpeechToTextApp() {
           }
         } else if (data.type === "status") {
           console.log("Status:", data.message);
+        } else if (data.type === "ping") {
+          // Respond to server ping
+          ws.send(JSON.stringify({ type: "pong" }));
+        } else if (data.type === "pong") {
+          // Server responded to our ping
+          console.log("Connection alive");
         }
       } catch (err) {
         console.error("Error parsing WebSocket message:", err);
       }
     };
 
-    ws.onclose = () => {
-      console.log("WebSocket disconnected");
+    ws.onclose = (event) => {
+      console.log("WebSocket disconnected", event.code, event.reason);
       setIsConnected(false);
+
+      // Attempt to reconnect after a delay if not a normal closure
+      if (event.code !== 1000 && event.code !== 1001) {
+        setTimeout(() => {
+          if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
+            console.log("Attempting to reconnect...");
+            connectWebSocket();
+          }
+        }, 3000);
+      }
     };
 
     ws.onerror = (error) => {

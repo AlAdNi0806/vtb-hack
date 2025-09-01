@@ -69,39 +69,58 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     await manager.connect(websocket, client_id)
     try:
         while True:
-            # Receive audio data or control messages
-            data = await websocket.receive()
-            
-            if "bytes" in data:
-                # Audio data received
-                audio_data = data["bytes"]
-                if client_id in manager.audio_processors:
-                    manager.audio_processors[client_id].process_audio_chunk(audio_data)
-            
-            elif "text" in data:
-                # Control message received
-                message = json.loads(data["text"])
-                
-                if message.get("type") == "start_recording":
+            try:
+                # Receive audio data or control messages with timeout
+                data = await asyncio.wait_for(websocket.receive(), timeout=30.0)
+
+                if "bytes" in data:
+                    # Audio data received
+                    audio_data = data["bytes"]
                     if client_id in manager.audio_processors:
-                        manager.audio_processors[client_id].start()
+                        manager.audio_processors[client_id].process_audio_chunk(audio_data)
+
+                elif "text" in data:
+                    # Control message received
+                    message = json.loads(data["text"])
+
+                    if message.get("type") == "start_recording":
+                        if client_id in manager.audio_processors:
+                            manager.audio_processors[client_id].start()
+                            await websocket.send_text(json.dumps({
+                                "type": "status",
+                                "message": "Recording started"
+                            }))
+
+                    elif message.get("type") == "stop_recording":
+                        if client_id in manager.audio_processors:
+                            manager.audio_processors[client_id].stop()
+                            await websocket.send_text(json.dumps({
+                                "type": "status",
+                                "message": "Recording stopped"
+                            }))
+
+                    elif message.get("type") == "ping":
+                        # Respond to ping to keep connection alive
                         await websocket.send_text(json.dumps({
-                            "type": "status",
-                            "message": "Recording started"
+                            "type": "pong"
                         }))
-                
-                elif message.get("type") == "stop_recording":
-                    if client_id in manager.audio_processors:
-                        manager.audio_processors[client_id].stop()
-                        await websocket.send_text(json.dumps({
-                            "type": "status", 
-                            "message": "Recording stopped"
-                        }))
-                        
+
+            except asyncio.TimeoutError:
+                # Send ping to check if connection is still alive
+                try:
+                    await websocket.send_text(json.dumps({
+                        "type": "ping"
+                    }))
+                except:
+                    break
+            except WebSocketDisconnect:
+                break
+
     except WebSocketDisconnect:
-        manager.disconnect(client_id)
+        pass
     except Exception as e:
         logger.error(f"WebSocket error for client {client_id}: {e}")
+    finally:
         manager.disconnect(client_id)
 
 @app.get("/health")

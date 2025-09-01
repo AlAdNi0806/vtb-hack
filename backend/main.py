@@ -41,8 +41,12 @@ class ConnectionManager:
         if client_id in self.active_connections:
             del self.active_connections[client_id]
         if client_id in self.audio_processors:
-            self.audio_processors[client_id].stop()
-            del self.audio_processors[client_id]
+            try:
+                self.audio_processors[client_id].cleanup()
+            except Exception as e:
+                logger.error(f"Error cleaning up audio processor for {client_id}: {e}")
+            finally:
+                del self.audio_processors[client_id]
         logger.info(f"Client {client_id} disconnected")
 
     async def send_transcription(self, client_id: str, text: str, is_final: bool):

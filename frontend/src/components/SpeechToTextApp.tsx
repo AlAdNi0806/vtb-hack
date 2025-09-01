@@ -10,6 +10,8 @@ interface TranscriptionMessage {
   message?: string;
 }
 
+const PYTHON_BACKEND_URL = "192.168.0.176:8000";
+
 export function SpeechToTextApp() {
   const [isRecording, setIsRecording] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
@@ -56,7 +58,7 @@ export function SpeechToTextApp() {
       return;
     }
 
-    const ws = new WebSocket(`ws://localhost:8000/ws/${clientIdRef.current}`);
+    const ws = new WebSocket(`ws://${PYTHON_BACKEND_URL}/ws/${clientIdRef.current}`);
     
     ws.onopen = () => {
       console.log("WebSocket connected");

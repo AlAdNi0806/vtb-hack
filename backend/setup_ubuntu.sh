@@ -32,6 +32,20 @@ pip install --upgrade pip
 echo "Installing Python dependencies..."
 pip install -r requirements.txt
 
+# Install additional dependencies for NeMo
+echo "Installing additional NeMo dependencies..."
+pip install Cython
+pip install nemo_toolkit[all]
+
 echo "Setup complete!"
-echo "To activate the virtual environment, run: source venv/bin/activate"
-echo "To start the server, run: python main.py"
+echo ""
+echo "🎉 Installation finished!"
+echo "📋 Available models:"
+echo "   - Parakeet 1.1B (multilingual) - Primary model"
+echo "   - Whisper Tiny (English) - Fallback model"
+echo ""
+echo "🚀 To start the server:"
+echo "   source venv/bin/activate"
+echo "   python main.py"
+echo ""
+echo "💡 The first run will download the Parakeet model (~4GB)"

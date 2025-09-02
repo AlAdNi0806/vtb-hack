@@ -31,7 +31,7 @@ pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
 
 # Load punctuation model
-punctuation_model_name = "RUPunct_big"  # Replace with actual model name or path
+punctuation_model_name = "RUPunct/RUPunct_big"  # Replace with actual model name or path
 print("Loading punctuation model...")
 punctuation_tokenizer = AutoTokenizer.from_pretrained(punctuation_model_name)
 punctuation_model = AutoModelForTokenClassification.from_pretrained(punctuation_model_name)

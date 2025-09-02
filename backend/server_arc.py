@@ -22,6 +22,8 @@ pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 print("Model loaded and ready.")
 
 # --------------------------------------------------------------
+# Replace the old transcribe_chunk function with this one in server.py
+
 def transcribe_chunk(pcm_bytes: bytes) -> str:
     """
     Transcribes an audio chunk directly from memory.
@@ -37,14 +39,25 @@ def transcribe_chunk(pcm_bytes: bytes) -> str:
     waveform_np = pcm_i16.astype(np.float32) / 32768.0
 
     try:
-        # Use the model's ability to transcribe from a NumPy array in memory
+        # Run inference in a no_grad context for efficiency
         with torch.no_grad():
             hyps = asr_model.transcribe([waveform_np], batch_size=1)
         
+        # Check if we got a valid, non-empty result
         if hyps and len(hyps) > 0:
             hypothesis = hyps[0]
-            print(f"Transcription result: '{hypothesis}'")
-            return hypothesis
+            
+            # THE FIX IS HERE: Check if it's the Hypothesis object and get its .text attribute
+            if hasattr(hypothesis, 'text'):
+                text = hypothesis.text
+                print(f"Transcription result: '{text}'")
+                return text
+            # Fallback in case the model returns a plain string
+            elif isinstance(hypothesis, str):
+                print(f"Transcription result: '{hypothesis}'")
+                return hypothesis
+
+        # Return an empty string if transcription result is empty
         return ""
 
     except Exception as e:

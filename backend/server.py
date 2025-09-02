@@ -1,44 +1,37 @@
-import io
-import torch
-import numpy as np
+import asyncio
+import websockets
+import json
 import nemo.collections.asr as nemo_asr
-from fastapi import FastAPI, WebSocket
 
-app = FastAPI()
+# Load pretrained ASR model (example Russian model, change as needed)
+asr_model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained("nvidia/stt_ru_conformer_transducer_large")
 
-asr_model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained(
-    model_name="nvidia/parakeet-rnnt-1.1b",
-    map_location="cpu"
-)
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    buffer = bytearray()
+async def recognize(websocket, path):
+    print("Client connected")
+    audio_buffer = b""
 
     try:
-        while True:
-            data = await websocket.receive_bytes()
-            buffer.extend(data)
+        async for message in websocket:
+            if isinstance(message, bytes):
+                # Accumulate audio bytes
+                audio_buffer += message
+                # Optionally: chunk audio_buffer and run partial decoding for real-time
+                # Here, for demo, we run on the entire buffer each time
+                transcript = asr_model.transcribe([audio_buffer])
+                await websocket.send(json.dumps({"transcript": transcript[0]}))
+            else:
+                # Handle text messages like commands (optional)
+                data = json.loads(message)
+                if data.get("action") == "stop":
+                    print("Stopping transcription as requested.")
+                    break
+    except websockets.ConnectionClosed:
+        print("Client disconnected")
 
-            if len(buffer) >= 16000 * 2 * 3:  # 3 seconds
-                # Convert raw PCM bytes → float32 numpy
-                audio_np = np.frombuffer(buffer, dtype=np.int16).astype(np.float32) / 32768.0
+async def main():
+    async with websockets.serve(recognize, "localhost", 8765):
+        print("ASR WebSocket server started on ws://localhost:8765")
+        await asyncio.Future()  # Run forever
 
-                # Pass directly to NeMo
-                result = asr_model.transcribe([audio_np])
-                if isinstance(result, list) and len(result) > 0:
-                    text = result[0]
-                    if isinstance(text, list):
-                        text = text[0] if text else ""
-                else:
-                    text = str(result)
-
-                print("Transcription raw result:", result, type(result))
-                print("Final text:", text, type(text))
-                await websocket.send_text(str(text))
-                buffer.clear()
-
-    except Exception as e:
-        print("WebSocket closed:", e)
-
+if __name__ == "__main__":
+    asyncio.run(main())

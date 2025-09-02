@@ -1,40 +1,85 @@
 <!DOCTYPE html>
-<html>
-  <body>
-    <h1>Realtime Transcription</h1>
-    <button id="start">Start</button>
-    <pre id="output"></pre>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Real-time Streaming ASR Frontend</title>
+<style>
+  #transcript {
+    border: 1px solid #ccc;
+    padding: 10px;
+    min-height: 100px;
+    white-space: pre-wrap;
+  }
+  button {
+    padding: 10px 20px;
+    font-size: 1.2em;
+  }
+</style>
+</head>
+<body>
+<h1>Realtime Speech-to-Text</h1>
+<button id="startStopBtn">Start Recording</button>
+<div id="transcript" placeholder="Transcription appears here..."></div>
 
-    <script>
-      const output = document.getElementById("output");
-      const startBtn = document.getElementById("start");
+<script>
+  const startStopBtn = document.getElementById('startStopBtn');
+  const transcriptDiv = document.getElementById('transcript');
 
-      startBtn.onclick = async () => {
-        const ws = new WebSocket("ws://192.168.0.176:8000/ws");
-        ws.onmessage = (event) => {
-          output.textContent += event.data + "\n";
-        };
+  let mediaRecorder;
+  let socket;
+  let recognizing = false;
 
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const audioCtx = new AudioContext();
-        const source = audioCtx.createMediaStreamSource(stream);
-        const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+  startStopBtn.onclick = async () => {
+    if (!recognizing) {
+      // Start recording
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
 
-        source.connect(processor);
-        processor.connect(audioCtx.destination);
+      socket = new WebSocket('ws://localhost:8765');
 
-        processor.onaudioprocess = (e) => {
-          const inputData = e.inputBuffer.getChannelData(0);
-          // Convert Float32 -> 16-bit PCM
-          let buffer = new ArrayBuffer(inputData.length * 2);
-          let view = new DataView(buffer);
-          for (let i = 0; i < inputData.length; i++) {
-            let s = Math.max(-1, Math.min(1, inputData[i]));
-            view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-          }
-          ws.send(buffer);
-        };
+      socket.onopen = () => {
+        mediaRecorder.start(250); // send audio chunks every 250ms
+        startStopBtn.textContent = 'Stop Recording';
+        recognizing = true;
       };
-    </script>
-  </body>
+
+      socket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.transcript) {
+          transcriptDiv.textContent = data.transcript;
+        }
+      };
+
+      socket.onclose = () => {
+        mediaRecorder.stop();
+        startStopBtn.textContent = 'Start Recording';
+        recognizing = false;
+      };
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0 && socket.readyState === WebSocket.OPEN) {
+          event.data.arrayBuffer().then(buffer => {
+            socket.send(buffer);
+          });
+        }
+      };
+
+      mediaRecorder.onerror = (event) => {
+        console.error("MediaRecorder error:", event.error);
+      };
+
+    } else {
+      // Stop recording
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.close();
+      }
+      startStopBtn.textContent = 'Start Recording';
+      recognizing = false;
+    }
+  };
+</script>
+</body>
 </html>

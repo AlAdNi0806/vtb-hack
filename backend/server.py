@@ -19,9 +19,9 @@ pool = None   # will be set to concurrent.futures.ThreadPoolExecutor()
 def transcribe_chunk(pcm_bytes: bytes) -> str:
     pcm_i16 = np.frombuffer(pcm_bytes, dtype=np.int16)
     waveform = torch.from_numpy(pcm_i16.astype(np.float32) / 32768.0)
-    # Ensure exactly 2-D: (batch, time)
-    waveform = waveform.unsqueeze(0)          # OK: (1, time)
-    # If your audio ever comes in stereo you’d reshape here.
+    waveform = waveform.unsqueeze(0)          # (1, time)   OK
+    # *** NEW LINE ***  make sure it is 2-D
+    waveform = waveform.squeeze(1) if waveform.dim() == 3 else waveform
 
     with torch.no_grad():
         hyps = asr_model.transcribe([waveform], batch_size=1)

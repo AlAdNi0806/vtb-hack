@@ -17,15 +17,11 @@ pool = None   # will be set to concurrent.futures.ThreadPoolExecutor()
 
 # --------------------------------------------------------------
 def transcribe_chunk(pcm_bytes: bytes) -> str:
-    """
-    pcm_bytes : raw 16-bit signed integers, mono, 16 kHz
-    """
-    # 1. bytes -> int16
     pcm_i16 = np.frombuffer(pcm_bytes, dtype=np.int16)
-    # 2. to float32 in range [-1, 1]
     waveform = torch.from_numpy(pcm_i16.astype(np.float32) / 32768.0)
-    # 3. NeMo wants (B, T)
-    waveform = waveform.unsqueeze(0)
+    # Ensure exactly 2-D: (batch, time)
+    waveform = waveform.unsqueeze(0)          # OK: (1, time)
+    # If your audio ever comes in stereo you’d reshape here.
 
     with torch.no_grad():
         hyps = asr_model.transcribe([waveform], batch_size=1)

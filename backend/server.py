@@ -6,6 +6,7 @@ import torchaudio
 import io
 import nemo.collections.asr as nemo_asr
 from functools import partial
+import numpy as np
 
 # Load model once
 MODEL_NAME = "nvidia/stt_ru_fastconformer_hybrid_large_pc"
@@ -15,23 +16,19 @@ asr_model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained(MODEL_NAME)
 pool = None   # will be set to concurrent.futures.ThreadPoolExecutor()
 
 # --------------------------------------------------------------
-def transcribe_chunk(buffer: bytes) -> str:
+def transcribe_chunk(pcm_bytes: bytes) -> str:
     """
-    Convert raw bytes to tensor and run NeMo ASR.
-    buffer: raw little-endian 16-bit PCM @ 16 kHz, mono
+    pcm_bytes : raw 16-bit signed integers, mono, 16 kHz
     """
-    # 1. bytes -> torch tensor
-    waveform, sr = torchaudio.load(io.BytesIO(buffer))
-    if sr != 16000:
-        waveform = torchaudio.functional.resample(waveform, sr, 16000)
+    # 1. bytes -> int16
+    pcm_i16 = np.frombuffer(pcm_bytes, dtype=np.int16)
+    # 2. to float32 in range [-1, 1]
+    waveform = torch.from_numpy(pcm_i16.astype(np.float32) / 32768.0)
+    # 3. NeMo wants (B, T)
+    waveform = waveform.unsqueeze(0)
 
-    # 2. NeMo wants (B, T) float tensor
-    waveform = waveform.squeeze(0)
-
-    # 3. run inference
     with torch.no_grad():
         hyps = asr_model.transcribe([waveform], batch_size=1)
-    # hyps -> ([text, ...], )  or ([text, ...], [time_stamps])
     return hyps[0][0]
 
 # --------------------------------------------------------------

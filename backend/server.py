@@ -64,7 +64,7 @@ async def main():
     global pool
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
-    async with websockets.serve(recognize, "localhost", 8765):
+    async with websockets.serve(recognize, "0.0.0.0", 8765):
         print("ASR WebSocket server on ws://localhost:8765")
         await asyncio.Future()  # run forever
 

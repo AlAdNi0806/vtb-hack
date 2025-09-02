@@ -34,32 +34,40 @@ let recognizing = false;
 startStopBtn.onclick = async () => {
   if (!recognizing) {
     const stream = await navigator.mediaDevices.getUserMedia({audio: true});
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 16000});
+    // DO NOT pass sampleRate here
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     source = audioCtx.createMediaStreamSource(stream);
-    processor = audioCtx.createScriptProcessor(4096, 1, 1); // buffer size 4096
-    const ws = new WebSocket('ws://localhost:8765');
+
+    const targetRate = 16000;
+    const downsampleRatio = audioCtx.sampleRate / targetRate;
+
+    processor = audioCtx.createScriptProcessor(4096, 1, 1);
+    const ws = new WebSocket('ws://192.168.0.176:8765');
 
     processor.onaudioprocess = e => {
-      const channelData = e.inputBuffer.getChannelData(0);
-      const pcm16 = new Int16Array(channelData.length);
-      for (let i = 0; i < channelData.length; i++) {
-        pcm16[i] = Math.max(-1, Math.min(1, channelData[i])) * 0x7FFF;
+      const input = e.inputBuffer.getChannelData(0);
+      const downsampledLen = Math.floor(input.length / downsampleRatio);
+      const pcm16 = new Int16Array(downsampledLen);
+
+      for (let i = 0; i < downsampledLen; i++) {
+        const src = Math.floor(i * downsampleRatio);
+        pcm16[i] = Math.max(-1, Math.min(1, input[src])) * 0x7FFF;
       }
+
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(pcm16.buffer);   // raw PCM
+        ws.send(pcm16.buffer);
       }
     };
 
     ws.onopen = () => {
       source.connect(processor);
-      processor.connect(audioCtx.destination);
+      processor.connect(audioCtx.destination); // needed for ScriptProcessor
       startStopBtn.textContent = 'Stop Recording';
       recognizing = true;
     };
 
     ws.onmessage = evt => {
-      const data = JSON.parse(evt.data);
-      transcriptDiv.textContent = data.transcript;
+      transcriptDiv.textContent = JSON.parse(evt.data).transcript;
     };
 
     ws.onclose = () => {

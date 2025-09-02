@@ -12,7 +12,7 @@ with open_dict(decoding_cfg):
 
 asr_model.change_decoding_strategy(decoding_cfg)
 
-hypotheses = asr_model.transcribe(["./examples_english_english.wav"], return_hypotheses=True)
+hypotheses = asr_model.transcribe(["./rec.wav"], return_hypotheses=True)
 
 word_timestamps = hypotheses[0].timestamp['word']
 segment_timestamps = hypotheses[0].timestamp['segment']

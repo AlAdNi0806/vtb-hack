@@ -35,7 +35,7 @@ def transcribe_chunk(buffer: bytes) -> str:
     return hyps[0][0]
 
 # --------------------------------------------------------------
-async def recognize(websocket, path):
+async def recognize(websocket):
     print("Client connected")
     loop = asyncio.get_running_loop()
     buffer = bytearray()

@@ -9,6 +9,7 @@ import concurrent.futures
 import time
 import logging
 import re
+from huggingface_hub import login, HfFolder
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -16,7 +17,8 @@ logger = logging.getLogger("ASR_Server")
 
 # --- Configuration ---
 ASR_MODEL_NAME = "nvidia/stt_ru_conformer_transducer_large"
-VAD_MODEL_NAME = "nvidia/vad_multilingual_1.1_small"
+# CORRECTED MODEL NAME - NVIDIA uses "nemo_" prefix for VAD models
+VAD_MODEL_NAME = "nvidia/nemo_vad_multilingual_1.1_small"
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8765
 SAMPLE_RATE = 16000
@@ -25,13 +27,60 @@ MAX_UTTERANCE_LENGTH = 30.0  # Maximum utterance length in seconds
 SILENCE_DURATION = 0.8  # Seconds of silence to consider end of utterance
 VAD_WINDOW_SIZE = 0.05  # VAD processes audio in 50ms windows
 
+# --- Hugging Face Authentication ---
+def setup_hf_authentication():
+    """Set up Hugging Face authentication for gated models."""
+    token = HfFolder.get_token()
+    
+    if not token:
+        logger.warning("""
+        No Hugging Face token found. You need to:
+        1. Create an account at https://huggingface.co
+        2. Visit https://huggingface.co/nvidia/nemo_vad_multilingual_1.1_small and agree to the terms
+        3. Get your token from https://huggingface.co/settings/tokens
+        4. Run 'huggingface-cli login' and enter your token
+        
+        Alternatively, set the HF_TOKEN environment variable.
+        """)
+        return False
+    
+    try:
+        # Verify the token works
+        from huggingface_hub import whoami
+        user = whoami(token=token)
+        logger.info(f"Authenticated with Hugging Face as {user['name']}")
+        return True
+    except Exception as e:
+        logger.error(f"Authentication failed: {e}")
+        logger.warning("""
+        Your Hugging Face token is invalid or doesn't have access to the VAD model.
+        Please make sure you've accepted the terms at:
+        https://huggingface.co/nvidia/nemo_vad_multilingual_1.1_small
+        """)
+        return False
+
 # --- Global Resources ---
+logger.info("Setting up Hugging Face authentication...")
+if not setup_hf_authentication():
+    logger.warning("Continuing without VAD model authentication - may fail to load VAD model")
+
 logger.info("Loading NeMo ASR model...")
 asr_model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained(ASR_MODEL_NAME)
-logger.info("Loading NeMo VAD model...")
 
-# CORRECTED: Use EncDecClassificationModel for VAD (not SpeakerDiarizationACAModel)
-vad_model = nemo_asr.models.EncDecClassificationModel.from_pretrained(VAD_MODEL_NAME)
+logger.info("Loading NeMo VAD model...")
+try:
+    # Try to load VAD model with explicit token handling
+    vad_model = nemo_asr.models.EncDecClassificationModel.from_pretrained(
+        VAD_MODEL_NAME,
+        # Pass token explicitly if available
+        **({"token": HfFolder.get_token()} if HfFolder.get_token() else {})
+    )
+    logger.info("VAD model loaded successfully.")
+except Exception as e:
+    logger.error(f"Failed to load VAD model: {e}")
+    logger.warning("Falling back to basic chunking without VAD - transcription quality may suffer")
+    vad_model = None
+
 pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 logger.info("All models loaded and ready.")
 
@@ -39,6 +88,17 @@ logger.info("All models loaded and ready.")
 # VAD processing function to detect speech segments
 def detect_voice_activity(pcm_bytes: bytes, sample_rate: int = SAMPLE_RATE):
     """Detects voice activity in audio buffer using NeMo VAD."""
+    if vad_model is None:
+        # Fallback to simple energy-based VAD if model failed to load
+        logger.warning("Using simple energy-based VAD fallback")
+        if not pcm_bytes:
+            return False, []
+        
+        # Simple energy-based VAD (threshold on audio amplitude)
+        audio = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        energy = np.mean(np.abs(audio))
+        return energy > 0.05, [[0, len(audio)]]
+    
     if not pcm_bytes:
         return False, []
     
@@ -95,6 +155,7 @@ def detect_voice_activity(pcm_bytes: bytes, sample_rate: int = SAMPLE_RATE):
         # If VAD fails, assume there's speech to avoid breaking the pipeline
         return True, [[0, len(audio)]]
 
+
 # --------------------------------------------------------------
 # Rule-based punctuation restoration for Russian
 def rule_based_punctuation_restoration(text: str) -> str:
@@ -123,26 +184,6 @@ def rule_based_punctuation_restoration(text: str) -> str:
     return text
 
 # --------------------------------------------------------------
-# Russian BERT-based punctuation restoration
-def bert_punctuation_restoration(text: str) -> str:
-    """Use rule-based approach for Russian punctuation (BERT models for Russian punctuation are limited)."""
-    if not text:
-        return ""
-    
-    # This is a placeholder - in production you'd use a Russian-specific model
-    # Since proper Russian BERT punctuation models are rare, we'll use enhanced rule-based approach
-    
-    # First apply rule-based restoration
-    text = rule_based_punctuation_restoration(text)
-    
-    # Additional Russian-specific rules
-    text = re.sub(r'\s+([.!?])', r'\1', text)  # Remove space before punctuation
-    text = re.sub(r'([.!?])([a-zа-я])', r'\1 \2', text)  # Add space after punctuation
-    text = re.sub(r'\s{2,}', ' ', text)  # Remove multiple spaces
-    
-    return text
-
-# --------------------------------------------------------------
 # Transcription function with buffer management
 def transcribe_utterance(pcm_bytes: bytes) -> str:
     """Transcribes a complete utterance with punctuation restoration."""
@@ -167,7 +208,7 @@ def transcribe_utterance(pcm_bytes: bytes) -> str:
                 return ""
             
             # Apply punctuation restoration
-            punctuated_text = bert_punctuation_restoration(text)
+            punctuated_text = rule_based_punctuation_restoration(text)
             
             return punctuated_text
         
@@ -284,7 +325,7 @@ async def recognize(websocket):
                         await websocket.send(json.dumps({
                             "status": "running",
                             "models_loaded": True,
-                            "vad_active": True
+                            "vad_active": vad_model is not None
                         }))
                 except json.JSONDecodeError:
                     logger.warning(f"Invalid JSON message: {msg}")
@@ -313,7 +354,7 @@ async def main():
     logger.info(f"Starting ASR WebSocket server on ws://{SERVER_HOST}:{SERVER_PORT}")
     logger.info(f"Models loaded:")
     logger.info(f"  ASR: {ASR_MODEL_NAME}")
-    logger.info(f"  VAD: {VAD_MODEL_NAME}")
+    logger.info(f"  VAD: {VAD_MODEL_NAME} {'(loaded)' if vad_model else '(not loaded - using fallback)'}")
     
     async with websockets.serve(recognize, SERVER_HOST, SERVER_PORT):
         logger.info(f"ASR WebSocket server started successfully!")

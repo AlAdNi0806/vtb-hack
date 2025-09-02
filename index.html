@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+  <body>
+    <h1>Realtime Transcription</h1>
+    <button id="start">Start</button>
+    <pre id="output"></pre>
+
+    <script>
+      const output = document.getElementById("output");
+      const startBtn = document.getElementById("start");
+
+      startBtn.onclick = async () => {
+        const ws = new WebSocket("ws://192.168.0.176:8000/ws");
+        ws.onmessage = (event) => {
+          output.textContent += event.data + "\n";
+        };
+
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const audioCtx = new AudioContext();
+        const source = audioCtx.createMediaStreamSource(stream);
+        const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+        source.connect(processor);
+        processor.connect(audioCtx.destination);
+
+        processor.onaudioprocess = (e) => {
+          const inputData = e.inputBuffer.getChannelData(0);
+          // Convert Float32 -> 16-bit PCM
+          let buffer = new ArrayBuffer(inputData.length * 2);
+          let view = new DataView(buffer);
+          for (let i = 0; i < inputData.length; i++) {
+            let s = Math.max(-1, Math.min(1, inputData[i]));
+            view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+          }
+          ws.send(buffer);
+        };
+      };
+    </script>
+  </body>
+</html>

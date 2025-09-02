@@ -34,7 +34,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 else:
                     text = str(result)
 
-                await websocket.send_text(text)
+                print("Transcription raw result:", result, type(result))
+                print("Final text:", text, type(text))
+                await websocket.send_text(str(text))
                 buffer.clear()
 
     except Exception as e:

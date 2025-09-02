@@ -1,7 +1,7 @@
 import nemo.collections.asr as nemo_asr
 from omegaconf import open_dict
 
-asr_model = nemo_asr.models.ASRModel.from_pretrained("nvidia/stt_en_fastconformer_transducer_large")
+asr_model = nemo_asr.models.ASRModel.from_pretrained("nvidia/stt_ru_fastconformer_hybrid_large_pc")
 
 decoding_cfg = asr_model.cfg.decoding
 with open_dict(decoding_cfg):

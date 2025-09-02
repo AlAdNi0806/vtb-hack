@@ -4,89 +4,132 @@
 <meta charset="UTF-8" />
 <title>Real-time Streaming ASR Frontend</title>
 <style>
-  #transcript {
+  body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
+  #final, #partial {
     border: 1px solid #ccc;
     padding: 10px;
+    margin-top: 20px;
     min-height: 100px;
+    width: 80%;
     white-space: pre-wrap;
+    background-color: #f9f9f9;
   }
-  button {
-    padding: 10px 20px;
-    font-size: 1.2em;
-  }
+  #partial { color: gray; } /* Mark as "unsure" */
+  button { padding: 10px 20px; font-size: 1.2em; cursor: pointer; }
 </style>
 </head>
 <body>
-<h1>Realtime Speech-to-Text</h1>
+
+<h1>Realtime Speech-to-Text (Optimized)</h1>
 <button id="startStopBtn">Start Recording</button>
-<div id="transcript" placeholder="Transcription appears here..."></div>
+<div id="final" placeholder="Finalized transcription appears here..."></div>
+<div id="partial" placeholder="Listening..."></div>
 
 <script>
 const startStopBtn = document.getElementById('startStopBtn');
-const transcriptDiv = document.getElementById('transcript');
+const finalDiv = document.getElementById('final');
+const partialDiv = document.getElementById('partial');
+const SERVER_URL = 'ws://192.168.0.176:8765'; // <-- IMPORTANT: Change to your server's IP if needed
 
 let audioCtx;
 let source;
-let processor;
+let workletNode;
 let socket;
-let recognizing = false;
+let isRecognizing = false;
 
-startStopBtn.onclick = async () => {
-  if (!recognizing) {
-    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
-    // DO NOT pass sampleRate here
+// --- Main control function ---
+startStopBtn.onclick = () => {
+  if (isRecognizing) {
+    stopRecording();
+  } else {
+    startRecording();
+  }
+};
+
+// --- Start Recording Logic ---
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     source = audioCtx.createMediaStreamSource(stream);
 
-    const targetRate = 16000;
-    const downsampleRatio = audioCtx.sampleRate / targetRate;
+    socket = new WebSocket(SERVER_URL);
 
-    processor = audioCtx.createScriptProcessor(4096, 1, 1);
-    const ws = new WebSocket('ws://192.168.0.176:8765');
+    socket.onopen = async () => {
+      console.log("WebSocket connection opened.");
+      // Load the AudioWorklet module
+      await audioCtx.audioWorklet.addModule('resampler-processor.js');
 
-    processor.onaudioprocess = e => {
-      const input = e.inputBuffer.getChannelData(0);
-      const downsampledLen = Math.floor(input.length / downsampleRatio);
-      const pcm16 = new Int16Array(downsampledLen);
+      // Create the AudioWorkletNode
+      workletNode = new AudioWorkletNode(audioCtx, 'resampler-processor', {
+        processorOptions: { targetRate: 16000 }
+      });
 
-      for (let i = 0; i < downsampledLen; i++) {
-        const src = Math.floor(i * downsampleRatio);
-        pcm16[i] = Math.max(-1, Math.min(1, input[src])) * 0x7FFF;
-      }
+      // Listen for messages (processed audio) from the worklet
+      workletNode.port.onmessage = (event) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(event.data);
+        }
+      };
 
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(pcm16.buffer);
-      }
-    };
-
-    ws.onopen = () => {
-      source.connect(processor);
-      processor.connect(audioCtx.destination); // needed for ScriptProcessor
+      // Connect the audio graph: Mic Source -> Worklet -> Destination (optional)
+      source.connect(workletNode);
+      // You don't need to connect to destination if you don't want to hear yourself
+      // workletNode.connect(audioCtx.destination); 
+      
       startStopBtn.textContent = 'Stop Recording';
-      recognizing = true;
+      partialDiv.textContent = 'Listening...';
+      isRecognizing = true;
     };
 
-    ws.onmessage = evt => {
-      transcriptDiv.textContent = JSON.parse(evt.data).transcript;
+    socket.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.partial) {
+        partialDiv.textContent = data.partial;
+      } else if (data.final) {
+        finalDiv.textContent += data.final + ' ';
+        partialDiv.textContent = ''; // Clear partial after final
+      }
     };
 
-    ws.onclose = () => {
-      processor.disconnect();
-      source.disconnect();
-      if (audioCtx.state !== 'closed') audioCtx.close();
-      startStopBtn.textContent = 'Start Recording';
-      recognizing = false;
+    socket.onclose = () => {
+      console.log("WebSocket connection closed.");
+      stopRecording(); // Ensure cleanup happens
     };
 
-  } else {
-    if (processor) processor.disconnect();
-    if (source) source.disconnect();
-    if (audioCtx) audioCtx.close();
-    if (socket && socket.readyState === WebSocket.OPEN) socket.close();
-    recognizing = false;
-    startStopBtn.textContent = 'Start Recording';
+    socket.onerror = (error) => {
+      console.error("WebSocket Error:", error);
+      stopRecording();
+    };
+
+  } catch (error) {
+    console.error("Error starting recording:", error);
+    alert("Could not start recording. Please grant microphone permissions.");
   }
-};
+}
+
+// --- Stop Recording Logic ---
+function stopRecording() {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.close();
+  }
+  
+  if (source) {
+    source.disconnect();
+    source.mediaStream.getTracks().forEach(track => track.stop());
+  }
+
+  if (workletNode) {
+    workletNode.disconnect();
+  }
+  
+  if (audioCtx && audioCtx.state !== 'closed') {
+    audioCtx.close();
+  }
+
+  startStopBtn.textContent = 'Start Recording';
+  isRecognizing = false;
+}
 </script>
 </body>
 </html>

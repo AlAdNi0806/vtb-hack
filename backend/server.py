@@ -31,7 +31,7 @@ def transcribe_chunk(pcm_bytes: bytes) -> str:
     print(f"Final waveform shape: {waveform.shape}")
     
     with torch.no_grad():
-        # Alternative 1: Try using transcribe_file with temporary audio
+        # Use temporary file approach
         try:
             import tempfile
             import soundfile as sf
@@ -41,17 +41,22 @@ def transcribe_chunk(pcm_bytes: bytes) -> str:
                 hyps = asr_model.transcribe([tmp.name])
                 import os
                 os.unlink(tmp.name)
-            return hyps[0]
-        except:
-            # Alternative 2: Use the forward method directly
-            signal_length = torch.tensor([waveform.shape[1]], dtype=torch.long)
-            logprobs, logprobs_length = asr_model.forward(
-                input_signal=waveform,
-                input_signal_length=signal_length
-            )
-            # Decode the logprobs to text (this is a simplified version)
-            # You might need to implement proper decoding here
-            return "Transcription using forward method - needs proper decoding"
+            
+            # Extract text from Hypothesis object
+            if hyps and len(hyps) > 0:
+                hypothesis = hyps[0]
+                # Handle both string and Hypothesis object cases
+                if hasattr(hypothesis, 'text'):
+                    return hypothesis.text
+                elif isinstance(hypothesis, str):
+                    return hypothesis
+                else:
+                    return str(hypothesis)
+            return ""
+            
+        except Exception as e:
+            print(f"Transcription error: {e}")
+            return ""
 
 # --------------------------------------------------------------
 async def recognize(websocket):

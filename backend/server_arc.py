@@ -6,112 +6,90 @@ import numpy as np
 import nemo.collections.asr as nemo_asr
 from functools import partial
 import concurrent.futures
-import time
 
 # --- Configuration ---
-MODEL_NAME = "nvidia/stt_ru_fastconformer_hybrid_large_pc"
+MODEL_NAME = "nvidia/stt_ru_conformer_transducer_large"
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8765
 SAMPLE_RATE = 16000
-CHUNK_DURATION_SECONDS = 3  # Fallback chunk size if needed
+CHUNK_DURATION_SECONDS = 3  # Process audio in 3-second chunks
 CHUNK_SIZE_BYTES = CHUNK_DURATION_SECONDS * SAMPLE_RATE * 2  # 16-bit PCM
-PAUSE_THRESHOLD_MS = 500  # ms of silence to trigger finalization
-PARTIAL_INTERVAL_MS = 300  # Send partials every 300ms during speech
-SILENCE_THRESHOLD = 0.01  # RMS threshold for silence detection
-VAD_WINDOW_SIZE_BYTES = 480  # ~30ms window at 16kHz, 16-bit (16000*0.03*2)
 
 # --- Global Resources ---
-print("Loading NeMo ASR model with punctuation...")
-asr_model = nemo_asr.models.EncDecHybridRNNTCTCBPEModel.from_pretrained(MODEL_NAME)
+print("Loading NeMo ASR model...")
+asr_model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained(MODEL_NAME)
 pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 print("Model loaded and ready.")
 
-# --- Simple Energy-Based VAD ---
-def is_silence(pcm_bytes: bytes, threshold: float = SILENCE_THRESHOLD) -> bool:
-    if len(pcm_bytes) == 0:
-        return True
-    pcm_i16 = np.frombuffer(pcm_bytes, dtype=np.int16)
-    waveform_np = pcm_i16.astype(np.float32) / 32768.0
-    rms = np.sqrt(np.mean(waveform_np ** 2))
-    return rms < threshold
+# --------------------------------------------------------------
+# Replace the old transcribe_chunk function with this one in server.py
 
-# --- Transcription Function ---
-def transcribe_audio(pcm_bytes: bytes) -> str:
+def transcribe_chunk(pcm_bytes: bytes) -> str:
     """
-    Transcribes audio from memory using the hybrid model (includes punctuation).
+    Transcribes an audio chunk directly from memory.
+    This function is designed to be run in a separate thread.
     """
     if not pcm_bytes:
         return ""
 
+    # Convert bytes to a NumPy array of 16-bit integers
     pcm_i16 = np.frombuffer(pcm_bytes, dtype=np.int16)
+    
+    # Convert to a normalized float32 NumPy array, as expected by the model
     waveform_np = pcm_i16.astype(np.float32) / 32768.0
 
     try:
+        # Run inference in a no_grad context for efficiency
         with torch.no_grad():
             hyps = asr_model.transcribe([waveform_np], batch_size=1)
         
+        # Check if we got a valid, non-empty result
         if hyps and len(hyps) > 0:
             hypothesis = hyps[0]
+            
+            # THE FIX IS HERE: Check if it's the Hypothesis object and get its .text attribute
             if hasattr(hypothesis, 'text'):
-                return hypothesis.text
+                text = hypothesis.text
+                print(f"Transcription result: '{text}'")
+                return text
+            # Fallback in case the model returns a plain string
             elif isinstance(hypothesis, str):
+                print(f"Transcription result: '{hypothesis}'")
                 return hypothesis
+
+        # Return an empty string if transcription result is empty
         return ""
 
     except Exception as e:
         print(f"Transcription error: {e}")
         return ""
 
-# --- WebSocket Handler ---
+# --------------------------------------------------------------
 async def recognize(websocket):
-    """Handles a single client connection with VAD for drafts and finals."""
+    """Handles a single client connection."""
     print("Client connected.")
     loop = asyncio.get_running_loop()
-    audio_buffer = bytearray()  # Accumulate speech audio
-    silence_duration_ms = 0.0
-    last_partial_time = time.time() * 1000
-    current_transcript = ""  # For accumulating raw text if needed
+    buffer = bytearray()
     
     try:
         async for msg in websocket:
             if isinstance(msg, bytes):
-                # Process VAD in small windows
-                for i in range(0, len(msg), VAD_WINDOW_SIZE_BYTES):
-                    window = msg[i:i + VAD_WINDOW_SIZE_BYTES]
-                    window_duration_ms = (len(window) / (SAMPLE_RATE * 2)) * 1000
-                    
-                    if is_silence(window):
-                        silence_duration_ms += window_duration_ms
-                    else:
-                        silence_duration_ms = 0.0
-                        audio_buffer.extend(window)  # Only add speech audio
+                buffer.extend(msg)
 
-                # Send partial if interval elapsed and there's audio
-                current_time = time.time() * 1000
-                if current_time - last_partial_time >= PARTIAL_INTERVAL_MS and audio_buffer:
-                    partial_text = await loop.run_in_executor(
-                        pool, partial(transcribe_audio, bytes(audio_buffer))
-                    )
-                    if partial_text and partial_text != current_transcript:
-                        current_transcript = partial_text
-                        await websocket.send(json.dumps({"partial": partial_text}))
-                    last_partial_time = current_time
+                # If we have a full chunk, process it
+                if len(buffer) >= CHUNK_SIZE_BYTES:
+                    current_chunk = bytes(buffer)
+                    buffer.clear() # Clear buffer to start accumulating the next chunk
 
-                # If silence exceeds threshold, finalize the segment
-                if silence_duration_ms > PAUSE_THRESHOLD_MS and audio_buffer:
-                    # Transcribe the full buffer (model adds punctuation)
-                    final_text = await loop.run_in_executor(
-                        pool, partial(transcribe_audio, bytes(audio_buffer))
+                    # Run the CPU-bound ASR in the thread pool
+                    text = await loop.run_in_executor(
+                        pool, partial(transcribe_chunk, current_chunk)
                     )
-                    if final_text:
-                        await websocket.send(json.dumps({"final": final_text}))
                     
-                    # Reset for next utterance
-                    audio_buffer.clear()
-                    silence_duration_ms = 0.0
-                    current_transcript = ""
-                    last_partial_time = current_time
+                    if text:
+                        await websocket.send(json.dumps({"transcript": text}))
             
+            # (Optional) Handle JSON messages for control, e.g., stop
             elif isinstance(msg, str):
                 data = json.loads(msg)
                 if data.get("action") == "stop":
@@ -122,16 +100,17 @@ async def recognize(websocket):
     except Exception as e:
         print(f"An error occurred: {e}")
     finally:
-        # Finalize any remaining audio
-        if audio_buffer:
-            final_text = await loop.run_in_executor(
-                pool, partial(transcribe_audio, bytes(audio_buffer))
+        # Process any remaining audio in the buffer when the client disconnects
+        if buffer:
+            print("Processing remaining audio chunk...")
+            text = await loop.run_in_executor(
+                pool, partial(transcribe_chunk, bytes(buffer))
             )
-            if final_text:
-                await websocket.send(json.dumps({"final": final_text}))
+            if text:
+                await websocket.send(json.dumps({"final_transcript": text}))
         print("Client disconnected.")
 
-# --- Server Startup ---
+# --------------------------------------------------------------
 async def main():
     """Starts the WebSocket server."""
     async with websockets.serve(recognize, SERVER_HOST, SERVER_PORT):

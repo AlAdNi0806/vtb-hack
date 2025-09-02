@@ -22,64 +22,63 @@
 <div id="transcript" placeholder="Transcription appears here..."></div>
 
 <script>
-  const startStopBtn = document.getElementById('startStopBtn');
-  const transcriptDiv = document.getElementById('transcript');
+const startStopBtn = document.getElementById('startStopBtn');
+const transcriptDiv = document.getElementById('transcript');
 
-  let mediaRecorder;
-  let socket;
-  let recognizing = false;
+let audioCtx;
+let source;
+let processor;
+let socket;
+let recognizing = false;
 
-  startStopBtn.onclick = async () => {
-    if (!recognizing) {
-      // Start recording
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+startStopBtn.onclick = async () => {
+  if (!recognizing) {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 16000});
+    source = audioCtx.createMediaStreamSource(stream);
+    processor = audioCtx.createScriptProcessor(4096, 1, 1); // buffer size 4096
+    const ws = new WebSocket('ws://localhost:8765');
 
-      socket = new WebSocket('ws://localhost:8765');
-
-      socket.onopen = () => {
-        mediaRecorder.start(250); // send audio chunks every 250ms
-        startStopBtn.textContent = 'Stop Recording';
-        recognizing = true;
-      };
-
-      socket.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.transcript) {
-          transcriptDiv.textContent = data.transcript;
-        }
-      };
-
-      socket.onclose = () => {
-        mediaRecorder.stop();
-        startStopBtn.textContent = 'Start Recording';
-        recognizing = false;
-      };
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0 && socket.readyState === WebSocket.OPEN) {
-          event.data.arrayBuffer().then(buffer => {
-            socket.send(buffer);
-          });
-        }
-      };
-
-      mediaRecorder.onerror = (event) => {
-        console.error("MediaRecorder error:", event.error);
-      };
-
-    } else {
-      // Stop recording
-      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-        mediaRecorder.stop();
+    processor.onaudioprocess = e => {
+      const channelData = e.inputBuffer.getChannelData(0);
+      const pcm16 = new Int16Array(channelData.length);
+      for (let i = 0; i < channelData.length; i++) {
+        pcm16[i] = Math.max(-1, Math.min(1, channelData[i])) * 0x7FFF;
       }
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.close();
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(pcm16.buffer);   // raw PCM
       }
+    };
+
+    ws.onopen = () => {
+      source.connect(processor);
+      processor.connect(audioCtx.destination);
+      startStopBtn.textContent = 'Stop Recording';
+      recognizing = true;
+    };
+
+    ws.onmessage = evt => {
+      const data = JSON.parse(evt.data);
+      transcriptDiv.textContent = data.transcript;
+    };
+
+    ws.onclose = () => {
+      processor.disconnect();
+      source.disconnect();
+      if (audioCtx.state !== 'closed') audioCtx.close();
       startStopBtn.textContent = 'Start Recording';
       recognizing = false;
-    }
-  };
+    };
+
+  } else {
+    if (processor) processor.disconnect();
+    if (source) source.disconnect();
+    if (audioCtx) audioCtx.close();
+    if (socket && socket.readyState === WebSocket.OPEN) socket.close();
+    recognizing = false;
+    startStopBtn.textContent = 'Start Recording';
+  }
+};
 </script>
 </body>
 </html>

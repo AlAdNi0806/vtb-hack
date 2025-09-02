@@ -8,7 +8,7 @@ from functools import partial
 import concurrent.futures
 
 # --- Configuration ---
-MODEL_NAME = "nvidia/stt_ru_conformer_transducer_large"
+MODEL_NAME = "nvidia/stt_ru_fastconformer_hybrid_large_pc"
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8765
 SAMPLE_RATE = 16000

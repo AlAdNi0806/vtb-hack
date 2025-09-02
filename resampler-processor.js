@@ -1,3 +1,5 @@
+// resampler-processor.js
+
 /**
  * An AudioWorkletProcessor for downsampling audio to a target sample rate.
  * It converts the audio to 16-bit PCM format and sends it to the main thread.
@@ -8,10 +10,7 @@ class ResamplerProcessor extends AudioWorkletProcessor {
     // The target sample rate is passed from the main thread
     this.targetRate = options.processorOptions.targetRate;
     this.downsampleRatio = sampleRate / this.targetRate; // sampleRate is a global in AudioWorklet
-    this.buffer = new Float32Array(0);
-    this.frameSize = 1024; // Process in smaller chunks for better real-time performance
-    
-    console.log(`AudioWorklet: Mic SR=${sampleRate}, Target SR=${this.targetRate}, Ratio=${this.downsampleRatio}`);
+    console.log(`AudioWorklet: Mic SR=${sampleRate}, Target SR=${this.targetRate}`);
   }
 
   /**
@@ -24,34 +23,21 @@ class ResamplerProcessor extends AudioWorkletProcessor {
       return true; // Keep processor alive
     }
 
-    // Append new data to buffer
-    const newBuffer = new Float32Array(this.buffer.length + input.length);
-    newBuffer.set(this.buffer);
-    newBuffer.set(input, this.buffer.length);
-    this.buffer = newBuffer;
+    const downsampledLen = Math.floor(input.length / this.downsampleRatio);
+    const pcm16 = new Int16Array(downsampledLen);
 
-    // Process in chunks to maintain real-time performance
-    while (this.buffer.length >= this.frameSize) {
-      const frame = this.buffer.slice(0, this.frameSize);
-      this.buffer = this.buffer.slice(this.frameSize);
-      
-      // Downsample the frame
-      const downsampledLen = Math.floor(frame.length / this.downsampleRatio);
-      const pcm16 = new Int16Array(downsampledLen);
-
-      for (let i = 0; i < downsampledLen; i++) {
-        const srcIndex = Math.floor(i * this.downsampleRatio);
-        if (srcIndex < frame.length) {
-          // Convert to 16-bit integer with proper scaling
-          pcm16[i] = Math.max(-32768, Math.min(32767, frame[srcIndex] * 32768));
-        }
-      }
-      
-      // Send to main thread
-      this.port.postMessage(pcm16.buffer, [pcm16.buffer]);
+    for (let i = 0; i < downsampledLen; i++) {
+      const srcIndex = Math.floor(i * this.downsampleRatio);
+      // Clamp value between -1 and 1, then convert to 16-bit integer
+      pcm16[i] = Math.max(-1, Math.min(1, input[srcIndex])) * 0x7FFF;
     }
+    
+    // Send the processed 16-bit PCM audio buffer back to the main thread.
+    // The second argument [pcm16.buffer] is a "transferable object",
+    // which efficiently transfers ownership without copying data.
+    this.port.postMessage(pcm16.buffer, [pcm16.buffer]);
 
-    return true; // Keep processor alive
+    return true; // Indicate that the processor should continue running
   }
 }
 

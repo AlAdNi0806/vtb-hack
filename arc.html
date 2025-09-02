@@ -2,89 +2,37 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Real-time Voice Assistant</title>
+<title>Real-time Streaming ASR Frontend</title>
 <style>
-  body { 
-    font-family: sans-serif; 
-    display: flex; 
-    flex-direction: column; 
-    align-items: center; 
-    max-width: 800px;
-    margin: 0 auto;
-    padding: 20px;
-  }
+  body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
   #transcript {
     border: 1px solid #ccc;
-    padding: 15px;
+    padding: 10px;
     margin-top: 20px;
-    min-height: 150px;
-    width: 100%;
+    min-height: 100px;
+    width: 80%;
     white-space: pre-wrap;
     background-color: #f9f9f9;
-    border-radius: 8px;
-    font-size: 1.1em;
-    line-height: 1.5;
   }
-  .partial { 
-    opacity: 0.7; 
-    font-style: italic; 
-  }
-  .final { 
-    font-weight: 500; 
-  }
-  button { 
-    padding: 12px 24px; 
-    font-size: 1.2em; 
-    cursor: pointer; 
-    background-color: #4285f4;
-    color: white;
-    border: none;
-    border-radius: 24px;
-    margin-bottom: 20px;
-    transition: all 0.2s;
-  }
-  button:hover {
-    background-color: #3367d6;
-    transform: scale(1.05);
-  }
-  button:active {
-    transform: scale(0.98);
-  }
-  button.recording {
-    background-color: #ea4335;
-    animation: pulse 2s infinite;
-  }
-  @keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(234, 67, 53, 0.7); }
-    70% { box-shadow: 0 0 0 15px rgba(234, 67, 53, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(234, 67, 53, 0); }
-  }
-  .status {
-    margin-top: 10px;
-    font-style: italic;
-    color: #666;
-  }
+  button { padding: 10px 20px; font-size: 1.2em; cursor: pointer; }
 </style>
 </head>
 <body>
 
-<h1>Real-time Voice Assistant</h1>
-<button id="startStopBtn">Start Listening</button>
-<div class="status" id="status">Ready</div>
+<h1>Realtime Speech-to-Text (Optimized)</h1>
+<button id="startStopBtn">Start Recording</button>
 <div id="transcript" placeholder="Transcription appears here..."></div>
 
 <script>
 const startStopBtn = document.getElementById('startStopBtn');
 const transcriptDiv = document.getElementById('transcript');
-const statusDiv = document.getElementById('status');
-const SERVER_URL = 'ws://192.168.0.176:8765'; // Change to your server's IP
+const SERVER_URL = 'ws://192.168.0.176:8765'; // <-- IMPORTANT: Change to your server's IP if needed
 
 let audioCtx;
 let source;
 let workletNode;
 let socket;
 let isRecognizing = false;
-let partialText = '';
 
 // --- Main control function ---
 startStopBtn.onclick = () => {
@@ -102,150 +50,81 @@ async function startRecording() {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     source = audioCtx.createMediaStreamSource(stream);
 
-    // Update UI
-    startStopBtn.textContent = 'Stop Listening';
-    startStopBtn.classList.add('recording');
-    statusDiv.textContent = 'Listening...';
-    isRecognizing = true;
-
     socket = new WebSocket(SERVER_URL);
 
     socket.onopen = async () => {
       console.log("WebSocket connection opened.");
+      // Load the AudioWorklet module
       await audioCtx.audioWorklet.addModule('resampler-processor.js');
 
+      // Create the AudioWorkletNode
       workletNode = new AudioWorkletNode(audioCtx, 'resampler-processor', {
         processorOptions: { targetRate: 16000 }
       });
 
+      // Listen for messages (processed audio) from the worklet
       workletNode.port.onmessage = (event) => {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(event.data);
         }
       };
 
-      // Connect the audio graph
+      // Connect the audio graph: Mic Source -> Worklet -> Destination (optional)
       source.connect(workletNode);
+      // You don't need to connect to destination if you don't want to hear yourself
+      // workletNode.connect(audioCtx.destination); 
       
-      console.log("Audio processing chain established");
+      startStopBtn.textContent = 'Stop Recording';
+      transcriptDiv.textContent = 'Listening...';
+      isRecognizing = true;
     };
 
     socket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.transcript) {
-          if (data.is_final) {
-            // Clear any partial text and add final result
-            transcriptDiv.innerHTML = '';
-            const finalSpan = document.createElement('span');
-            finalSpan.className = 'final';
-            finalSpan.textContent = data.transcript;
-            transcriptDiv.appendChild(finalSpan);
-            
-            // Send to LLM for voice assistant processing
-            processForVoiceAssistant(data.transcript);
-            
-            statusDiv.textContent = 'Ready';
-          } else {
-            // Update partial text
-            partialText = data.transcript;
-            transcriptDiv.innerHTML = '';
-            const partialSpan = document.createElement('span');
-            partialSpan.className = 'partial';
-            partialSpan.textContent = partialText;
-            transcriptDiv.appendChild(partialSpan);
-            
-            statusDiv.textContent = 'Processing...';
-          }
-        }
-      } catch (e) {
-        console.error("Error processing message:", e);
+      const data = JSON.parse(event.data);
+      if (data.transcript) {
+        // Since the server sends complete phrases, we append them.
+        transcriptDiv.textContent += data.transcript + ' ';
+      } else if (data.final_transcript) {
+        transcriptDiv.textContent += data.final_transcript;
       }
     };
 
     socket.onclose = () => {
       console.log("WebSocket connection closed.");
-      if (isRecognizing) {
-        stopRecording();
-      }
+      stopRecording(); // Ensure cleanup happens
     };
 
     socket.onerror = (error) => {
       console.error("WebSocket Error:", error);
-      statusDiv.textContent = 'Connection error';
       stopRecording();
     };
 
   } catch (error) {
     console.error("Error starting recording:", error);
-    statusDiv.textContent = 'Microphone access denied';
     alert("Could not start recording. Please grant microphone permissions.");
   }
 }
 
-// --- Voice Assistant Processing ---
-function processForVoiceAssistant(transcript) {
-  statusDiv.textContent = 'Processing voice command...';
-  
-  // This is where you would send the transcript to your LLM
-  // For demonstration, we'll just simulate a response
-  setTimeout(() => {
-    statusDiv.textContent = 'Ready';
-    const responseDiv = document.createElement('div');
-    responseDiv.style.marginTop = '15px';
-    responseDiv.style.padding = '10px';
-    responseDiv.style.backgroundColor = '#e8f0fe';
-    responseDiv.style.borderRadius = '8px';
-    responseDiv.innerHTML = `<strong>Assistant:</strong> Processing command: "${transcript}"`;
-    transcriptDiv.appendChild(responseDiv);
-    
-    // Scroll to bottom
-    transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
-  }, 1000);
-}
-
 // --- Stop Recording Logic ---
 function stopRecording() {
-  // Clean up socket
-  if (socket) {
-    try {
-      // Send stop signal
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ "action": "stop" }));
-      }
-      socket.close();
-    } catch (e) {
-      console.log("Error closing socket:", e);
-    }
-    socket = null;
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.close();
   }
   
-  // Clean up audio
   if (source) {
     source.disconnect();
-    if (source.mediaStream) {
-      source.mediaStream.getTracks().forEach(track => track.stop());
-    }
-    source = null;
+    source.mediaStream.getTracks().forEach(track => track.stop());
   }
 
   if (workletNode) {
     workletNode.disconnect();
-    workletNode = null;
   }
   
   if (audioCtx && audioCtx.state !== 'closed') {
-    audioCtx.close()
-      .then(() => {
-        audioCtx = null;
-        console.log("Audio context closed");
-      })
-      .catch(e => console.error("Error closing audio context:", e));
+    audioCtx.close();
   }
 
-  // Update UI
-  startStopBtn.textContent = 'Start Listening';
-  startStopBtn.classList.remove('recording');
+  startStopBtn.textContent = 'Start Recording';
   isRecognizing = false;
 }
 </script>

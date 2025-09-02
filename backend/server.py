@@ -4,7 +4,7 @@ import json
 import nemo.collections.asr as nemo_asr
 
 # Load pretrained ASR model (example Russian model, change as needed)
-asr_model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained("nvidia/stt_ru_conformer_transducer_large")
+asr_model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained("nvidia/stt_ru_fastconformer_hybrid_large_pc")
 
 async def recognize(websocket, path):
     print("Client connected")

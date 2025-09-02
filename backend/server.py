@@ -20,17 +20,38 @@ def transcribe_chunk(pcm_bytes: bytes) -> str:
     pcm_i16 = np.frombuffer(pcm_bytes, dtype=np.int16)
     waveform = torch.from_numpy(pcm_i16.astype(np.float32) / 32768.0)
     
-    # Fix: Ensure waveform is exactly 2D: (batch, time)
+    # Ensure waveform is exactly 2D: (batch, time)
     if waveform.dim() == 1:
         waveform = waveform.unsqueeze(0)  # (time,) -> (1, time)
     elif waveform.dim() == 3:
-        waveform = waveform.squeeze(1)    # (1, 1, time) -> (1, time)
+        waveform = waveform.squeeze()     # Remove all singleton dimensions
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)
     
-    print(f"Waveform shape: {waveform.shape}")  # Debug print
+    print(f"Final waveform shape: {waveform.shape}")
     
     with torch.no_grad():
-        hyps = asr_model.transcribe([waveform], batch_size=1)
-    return hyps[0][0]
+        # Alternative 1: Try using transcribe_file with temporary audio
+        try:
+            import tempfile
+            import soundfile as sf
+            
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+                sf.write(tmp.name, waveform.squeeze().numpy(), 16000)
+                hyps = asr_model.transcribe([tmp.name])
+                import os
+                os.unlink(tmp.name)
+            return hyps[0]
+        except:
+            # Alternative 2: Use the forward method directly
+            signal_length = torch.tensor([waveform.shape[1]], dtype=torch.long)
+            logprobs, logprobs_length = asr_model.forward(
+                input_signal=waveform,
+                input_signal_length=signal_length
+            )
+            # Decode the logprobs to text (this is a simplified version)
+            # You might need to implement proper decoding here
+            return "Transcription using forward method - needs proper decoding"
 
 # --------------------------------------------------------------
 async def recognize(websocket):

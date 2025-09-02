@@ -7,86 +7,93 @@ import nemo.collections.asr as nemo_asr
 from functools import partial
 import concurrent.futures
 import time
+import logging
+import re
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("ASR_Server")
 
 # --- Configuration ---
 ASR_MODEL_NAME = "nvidia/stt_ru_conformer_transducer_large"
-VAD_MODEL_NAME = "nvidia/vad_multilingual_1.1_small"  # Official VAD model
+VAD_MODEL_NAME = "nvidia/vad_multilingual_1.1_small"
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8765
 SAMPLE_RATE = 16000
 VAD_THRESHOLD = 0.5
-MAX_UTTERANCE_LENGTH = 30.0
-SILENCE_DURATION = 0.8
-VAD_WINDOW_LENGTH_IN_SEC = 0.5  # VAD processes in 0.5s chunks
-VAD_SHIFT_MS = 10  # Stride for VAD processing
+MAX_UTTERANCE_LENGTH = 30.0  # Maximum utterance length in seconds
+SILENCE_DURATION = 0.8  # Seconds of silence to consider end of utterance
+VAD_WINDOW_SIZE = 0.05  # VAD processes audio in 50ms windows
 
 # --- Global Resources ---
-print("Loading NeMo ASR and VAD models...")
-
-# Load ASR model
+logger.info("Loading NeMo ASR model...")
 asr_model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained(ASR_MODEL_NAME)
+logger.info("Loading NeMo VAD model...")
 
-# Load VAD model (correct class)
+# CORRECTED: Use EncDecClassificationModel for VAD (not SpeakerDiarizationACAModel)
 vad_model = nemo_asr.models.EncDecClassificationModel.from_pretrained(VAD_MODEL_NAME)
-
-# Move models to GPU if available
-if torch.cuda.is_available():
-    asr_model = asr_model.to('cuda')
-    vad_model = vad_model.to('cuda')
-
-# Set both models to eval mode
-asr_model.eval()
-vad_model.eval()
-
 pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
-print("All models loaded and ready.")
+logger.info("All models loaded and ready.")
 
 # --------------------------------------------------------------
 # VAD processing function to detect speech segments
-def detect_voice_activity(pcm_bytes: bytes):
+def detect_voice_activity(pcm_bytes: bytes, sample_rate: int = SAMPLE_RATE):
     """Detects voice activity in audio buffer using NeMo VAD."""
-    if not pcm_bytes or len(pcm_bytes) == 0:
-        return False
-
+    if not pcm_bytes:
+        return False, []
+    
     # Convert bytes to numpy array
-    audio = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0  # Normalize to [-1, 1]
-
-    # Create a tensor
-    audio_tensor = torch.tensor(audio).unsqueeze(0)  # Add batch dim
-    if torch.cuda.is_available():
-        audio_tensor = audio_tensor.to('cuda')
-
-    # VAD model expects fixed window sizes; we'll process in chunks
-    window_size = int(VAD_WINDOW_LENGTH_IN_SEC * SAMPLE_RATE)
+    audio = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
     
-    # If audio is shorter than window, pad it
-    if audio_tensor.shape[1] < window_size:
-        padding = torch.zeros((1, window_size - audio_tensor.shape[1]))
-        if torch.cuda.is_available():
-            padding = padding.to('cuda')
-        audio_tensor = torch.cat([audio_tensor, padding], dim=1)
-    
-    # Split into overlapping windows if longer
-    num_windows = max(1, int((audio_tensor.shape[1] - window_size) / (VAD_SHIFT_MS / 1000 * SAMPLE_RATE)) + 1)
-    speech_detected = False
-
-    with torch.no_grad():
-        for i in range(num_windows):
-            start_idx = int(i * (VAD_SHIFT_MS / 1000 * SAMPLE_RATE))
-            end_idx = start_idx + window_size
-            if end_idx > audio_tensor.shape[1]:
-                break
-            chunk = audio_tensor[:, start_idx:end_idx]
-
-            # Run VAD
-            logits = vad_model.forward(input_signal=chunk, input_signal_length=torch.tensor([chunk.shape[1]]).to(chunk.device))
-            prob = torch.sigmoid(logits).cpu().numpy()[0][0]
-
-            if prob > VAD_THRESHOLD:
-                speech_detected = True
-                break  # Early exit if speech found
-
-    return speech_detected
+    try:
+        # Process through VAD model
+        with torch.no_grad():
+            # VAD model expects audio tensor and length tensor
+            audio_tensor = torch.tensor(audio).unsqueeze(0)  # Add batch dimension
+            audio_len = torch.tensor([len(audio)])
+            
+            # Get VAD predictions
+            vad_probs = vad_model.classify(audio_signal=audio_tensor, length=audio_len)
+            
+            # Extract speech probabilities
+            # VAD output structure: [batch, time, classes] - we want class 1 (speech)
+            if isinstance(vad_probs, tuple):
+                vad_probs = vad_probs[0]
+            
+            # Convert to numpy and extract speech probabilities (class 1)
+            vad_probs_np = vad_probs.cpu().numpy()[0, :, 1]  # [time, speech_prob]
+            
+            # Detect speech segments
+            speech_segments = []
+            current_segment = None
+            
+            # Calculate window size in samples
+            window_samples = int(VAD_WINDOW_SIZE * sample_rate)
+            
+            for i, prob in enumerate(vad_probs_np):
+                is_speech = prob > VAD_THRESHOLD
+                
+                if is_speech and current_segment is None:
+                    # Start of speech segment
+                    current_segment = [i * window_samples, i * window_samples]
+                elif is_speech and current_segment is not None:
+                    # Extend current segment
+                    current_segment[1] = (i + 1) * window_samples
+                elif not is_speech and current_segment is not None:
+                    # End of speech segment
+                    speech_segments.append(current_segment)
+                    current_segment = None
+            
+            # Add last segment if exists
+            if current_segment is not None:
+                speech_segments.append(current_segment)
+                
+            return len(speech_segments) > 0, speech_segments
+            
+    except Exception as e:
+        logger.error(f"VAD processing error: {e}", exc_info=True)
+        # If VAD fails, assume there's speech to avoid breaking the pipeline
+        return True, [[0, len(audio)]]
 
 # --------------------------------------------------------------
 # Rule-based punctuation restoration for Russian
@@ -95,20 +102,43 @@ def rule_based_punctuation_restoration(text: str) -> str:
     if not text:
         return ""
     
+    # Clean up text
     text = text.strip()
     if not text:
         return ""
     
     # Capitalize first letter
-    text = text[0].upper() + text[1:] if text else text
+    if text:
+        text = text[0].upper() + text[1:]
     
-    # Add ending punctuation
-    if not text.endswith(('.', '!', '?')):
-        question_words = ['кто', 'что', 'где', 'когда', 'почему', 'зачем', 'как', 'какой', 'не', 'ни']
-        if any(text.lower().startswith(word) for word in question_words):
+    # Ensure text ends with proper punctuation
+    if not text.endswith(('.', '!', '?', '...')):
+        # Simple heuristic: if text contains question words, add question mark
+        question_words = ['кто', 'что', 'где', 'когда', 'почему', 'зачем', 'как', 'какой', 'ли']
+        if any(word in text.lower().split() for word in question_words):
             text += '?'
         else:
             text += '.'
+    
+    return text
+
+# --------------------------------------------------------------
+# Russian BERT-based punctuation restoration
+def bert_punctuation_restoration(text: str) -> str:
+    """Use rule-based approach for Russian punctuation (BERT models for Russian punctuation are limited)."""
+    if not text:
+        return ""
+    
+    # This is a placeholder - in production you'd use a Russian-specific model
+    # Since proper Russian BERT punctuation models are rare, we'll use enhanced rule-based approach
+    
+    # First apply rule-based restoration
+    text = rule_based_punctuation_restoration(text)
+    
+    # Additional Russian-specific rules
+    text = re.sub(r'\s+([.!?])', r'\1', text)  # Remove space before punctuation
+    text = re.sub(r'([.!?])([a-zа-я])', r'\1 \2', text)  # Add space after punctuation
+    text = re.sub(r'\s{2,}', ' ', text)  # Remove multiple spaces
     
     return text
 
@@ -121,41 +151,42 @@ def transcribe_utterance(pcm_bytes: bytes) -> str:
     
     # Convert bytes to normalized float32 array
     waveform_np = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-    waveform_np = np.expand_dims(waveform_np, axis=0)  # Add batch dim
     
     try:
+        # Transcribe with ASR model
         with torch.no_grad():
-            # Transcribe
-            if torch.cuda.is_available():
-                # Move to GPU
-                waveform_np = torch.tensor(waveform_np).to('cuda')
-                hyps = asr_model.transcribe(waveform_np, batch_size=1)
-            else:
-                hyps = asr_model.transcribe([waveform_np], batch_size=1)
+            hyps = asr_model.transcribe([waveform_np], batch_size=1)
         
         if hyps and len(hyps) > 0:
-            text = hyps[0]
-            if hasattr(text, 'text'):
-                text = text.text
-            text = text.strip()
+            hypothesis = hyps[0]
+            text = hypothesis.text if hasattr(hypothesis, 'text') else str(hypothesis)
             
-            # Apply punctuation
-            return rule_based_punctuation_restoration(text)
+            # Clean up the transcription
+            text = re.sub(r'\s+', ' ', text).strip()
+            if not text:
+                return ""
+            
+            # Apply punctuation restoration
+            punctuated_text = bert_punctuation_restoration(text)
+            
+            return punctuated_text
         
         return ""
     except Exception as e:
-        print(f"Transcription error: {e}")
+        logger.error(f"Transcription error: {e}", exc_info=True)
         return ""
 
 # --------------------------------------------------------------
 async def recognize(websocket):
     """Handles a single client connection with VAD-based utterance detection."""
-    print("Client connected.")
+    logger.info("Client connected.")
     loop = asyncio.get_running_loop()
     audio_buffer = bytearray()
     last_speech_time = time.time()
     is_speaking = False
     utterance_start_time = None
+    partial_transcript = ""
+    last_partial_update = time.time()
     
     try:
         async for msg in websocket:
@@ -165,65 +196,107 @@ async def recognize(websocket):
                 
                 current_time = time.time()
                 
-                # Only check VAD every 100ms to reduce load
-                if current_time - last_speech_time >= 0.1:
-                    # Convert buffer to bytes for VAD
-                    audio_chunk = bytes(audio_buffer[-int(SAMPLE_RATE * 0.5):])  # Last 500ms
-                    
-                    has_speech = await loop.run_in_executor(
-                        pool, detect_voice_activity, audio_chunk
+                # Only run VAD processing periodically to reduce load
+                if current_time - last_speech_time > 0.1 or not is_speaking:
+                    # Process buffer with VAD in a thread
+                    has_speech, _ = await loop.run_in_executor(
+                        pool, partial(detect_voice_activity, bytes(audio_buffer))
                     )
                     
+                    # Update speaking state
                     if has_speech:
                         if not is_speaking:
+                            # Speech just started
                             is_speaking = True
                             utterance_start_time = current_time
-                            print("🎤 Speech detected - starting utterance")
+                            logger.info("Speech detected - starting utterance")
+                            partial_transcript = ""
                         
+                        # Reset silence timer
                         last_speech_time = current_time
                     else:
                         if is_speaking:
+                            # Check if silence duration exceeds threshold
                             silence_duration = current_time - last_speech_time
+                            
+                            # Check if we've reached max utterance length
                             utterance_duration = current_time - utterance_start_time
                             
                             if silence_duration >= SILENCE_DURATION or utterance_duration >= MAX_UTTERANCE_LENGTH:
-                                print(f"🛑 Utterance ended after {silence_duration:.2f}s silence")
+                                # End of utterance detected
+                                logger.info(f"End of utterance detected after {silence_duration:.2f}s silence")
                                 
-                                # Process full utterance
+                                # Process the complete utterance
                                 utterance = bytes(audio_buffer)
                                 audio_buffer.clear()
                                 
+                                # Transcribe in thread
                                 text = await loop.run_in_executor(
                                     pool, partial(transcribe_utterance, utterance)
                                 )
                                 
                                 if text:
+                                    # Send the complete utterance
                                     await websocket.send(json.dumps({
                                         "transcript": text,
                                         "is_final": True
                                     }))
-                                    print(f"✅ Final transcript: {text}")
+                                    logger.info(f"Sent final transcript: {text}")
                                 
+                                # Reset state
                                 is_speaking = False
                                 utterance_start_time = None
-                    
-                    # Prevent buffer overflow
-                    max_buf = int(MAX_UTTERANCE_LENGTH * SAMPLE_RATE * 2)
-                    if len(audio_buffer) > max_buf:
-                        audio_buffer = audio_buffer[-max_buf:]
+                                partial_transcript = ""
+                        
+                # Optional: Send partial results for UI feedback (every 1.5 seconds)
+                if is_speaking and current_time - last_speech_time < SILENCE_DURATION * 0.7:
+                    if current_time - last_partial_update > 1.5:
+                        # Create a partial transcription (without final punctuation)
+                        partial_audio = bytes(audio_buffer)
+                        partial_text = await loop.run_in_executor(
+                            pool, partial(transcribe_utterance, partial_audio)
+                        )
+                        
+                        if partial_text and partial_text != partial_transcript:
+                            # Remove any ending punctuation for partial results
+                            partial_text = partial_text.rstrip('.!?')
+                            if partial_text:
+                                await websocket.send(json.dumps({
+                                    "transcript": partial_text,
+                                    "is_final": False
+                                }))
+                                partial_transcript = partial_text
+                                last_partial_update = current_time
+                
+                # Prevent buffer from growing too large
+                max_buffer_size = int(MAX_UTTERANCE_LENGTH * SAMPLE_RATE * 2)
+                if len(audio_buffer) > max_buffer_size:
+                    audio_buffer = audio_buffer[-max_buffer_size:]
             
+            # Handle control messages
             elif isinstance(msg, str):
-                data = json.loads(msg)
-                if data.get("action") == "stop":
-                    break
+                try:
+                    data = json.loads(msg)
+                    if data.get("action") == "stop":
+                        break
+                    elif data.get("action") == "status":
+                        # Send system status
+                        await websocket.send(json.dumps({
+                            "status": "running",
+                            "models_loaded": True,
+                            "vad_active": True
+                        }))
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON message: {msg}")
 
     except websockets.exceptions.ConnectionClosed as e:
-        print(f"Connection closed: {e.reason}")
+        logger.info(f"Connection closed: {e.reason} (code: {e.code})")
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        logger.error(f"An error occurred: {e}", exc_info=True)
     finally:
+        # Process any remaining audio on disconnect
         if audio_buffer and is_speaking:
-            print("Processing remaining audio...")
+            logger.info("Processing remaining audio on disconnect...")
             text = await loop.run_in_executor(
                 pool, partial(transcribe_utterance, bytes(audio_buffer))
             )
@@ -232,13 +305,25 @@ async def recognize(websocket):
                     "transcript": text,
                     "is_final": True
                 }))
-        print("Client disconnected.")
+        logger.info("Client disconnected.")
 
 # --------------------------------------------------------------
 async def main():
+    """Starts the WebSocket server."""
+    logger.info(f"Starting ASR WebSocket server on ws://{SERVER_HOST}:{SERVER_PORT}")
+    logger.info(f"Models loaded:")
+    logger.info(f"  ASR: {ASR_MODEL_NAME}")
+    logger.info(f"  VAD: {VAD_MODEL_NAME}")
+    
     async with websockets.serve(recognize, SERVER_HOST, SERVER_PORT):
-        print(f"🎙️ ASR WebSocket server running on ws://{SERVER_HOST}:{SERVER_PORT}")
+        logger.info(f"ASR WebSocket server started successfully!")
+        logger.info(f"Connect to: ws://{SERVER_HOST}:{SERVER_PORT}")
         await asyncio.Future()  # Run forever
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("\nServer stopped by user.")
+    except Exception as e:
+        logger.error(f"Failed to start server: {e}", exc_info=True)

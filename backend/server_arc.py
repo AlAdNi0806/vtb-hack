@@ -7,7 +7,7 @@ from transformers import pipeline          #  <── optional for punctuation
 
 # -------------------- CONFIG --------------------
 MODEL_NAME          = "nvidia/stt_ru_conformer_transducer_large"
-PUNC_MODEL          = "punctuate-ai/punctuation-multilingual"   # optional
+PUNC_MODEL          = "RUPunct/RUPunct_medium"   # optional
 SERVER_HOST         = "0.0.0.0"
 SERVER_PORT         = 8765
 SAMPLE_RATE         = 16_000

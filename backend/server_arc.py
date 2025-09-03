@@ -29,7 +29,7 @@ PARTIAL_INTERVAL    = 0.40          # seconds between partial emits
 # ------------------------------------------------
 
 print("Loading NeMo ASR model...")
-asr_model = nemo.asr.models.EncDecRNNTBPEModel.from_pretrained(MODEL_NAME)
+asr_model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained(MODEL_NAME)
 pool      = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 vad       = webrtcvad.Vad(VAD_AGGRESSIVENESS)
 print("Model loaded and ready.")

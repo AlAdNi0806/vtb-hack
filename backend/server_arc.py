@@ -11,67 +11,72 @@ from collections import deque
 import time
 
 # --- Configuration ---
-MODEL_NAME = "nvidia/stt_ru_fastconformer_hybrid_large_pc"  # Changed to model with punctuation and capitalization for better sentence end prediction
+MODEL_NAME = "nvidia/stt_ru_conformer_transducer_large"
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8765
 SAMPLE_RATE = 16000
 FRAME_DURATION_MS = 30  # Frame size for VAD (10, 20, or 30 ms)
-FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000)  # Frame size in samples
 VAD_AGGRESSIVENESS = 2  # 0-3, with 3 being the most aggressive
-SILENCE_TIMEOUT = 1.5  # Seconds of silence to consider speech ended
-MIN_SPEECH_DURATION = 0.5  # Minimum speech duration to consider it valid speech
-PARTIAL_INTERVAL = 0.5  # Interval in seconds to send partial transcripts
-MIN_PARTIAL_DURATION = 0.5  # Minimum audio duration in seconds for partial transcription
-MIN_PARTIAL_BYTES = int(SAMPLE_RATE * 2 * MIN_PARTIAL_DURATION)
+SILENCE_TIMEOUT = 1.0  # Seconds of silence to consider speech ended
+MIN_SPEECH_DURATION = 0.25 # Minimum speech duration to consider it valid speech
+
+# NEW: How often to run streaming transcription (in seconds)
+# A smaller value is more "real-time" but more computationally expensive.
+TRANSCRIPTION_INTERVAL = 0.5 
+TRANSCRIPTION_CHUNK_SAMPLES = int(SAMPLE_RATE * TRANSCRIPTION_INTERVAL)
+TRANSCRIPTION_CHUNK_BYTES = TRANSCRIPTION_CHUNK_SAMPLES * 2 # 16-bit audio
 
 # --- Global Resources ---
 print("Loading NeMo ASR model...")
 asr_model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained(MODEL_NAME)
+# Set model to evaluation mode
+asr_model.eval()
 pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
 print("Model loaded and ready.")
 
 # --------------------------------------------------------------
-def transcribe_audio(pcm_bytes: bytes) -> str:
+# NEW: Function dedicated to streaming transcription
+def transcribe_stream_chunk(audio_chunk_bytes: bytes, state, context) -> (str, tuple, tuple):
     """
-    Transcribes audio directly from memory.
-    This function is designed to be run in a separate thread.
-    """
-    if not pcm_bytes:
-        return ""
-
-    # Convert bytes to a NumPy array of 16-bit integers
-    pcm_i16 = np.frombuffer(pcm_bytes, dtype=np.int16)
+    Transcribes a single chunk of audio in a streaming fashion.
     
-    # Convert to a normalized float32 NumPy array, as expected by the model
+    Args:
+        audio_chunk_bytes: The raw bytes of the audio chunk.
+        state: The previous decoder state from the ASR model.
+        context: The previous acoustic encoder context from the ASR model.
+
+    Returns:
+        A tuple containing (transcribed_text, new_state, new_context).
+    """
+    if not audio_chunk_bytes:
+        return "", state, context
+
+    # Convert bytes to a normalized float32 NumPy array
+    pcm_i16 = np.frombuffer(audio_chunk_bytes, dtype=np.int16)
     waveform_np = pcm_i16.astype(np.float32) / 32768.0
+    waveform_tensor = torch.from_numpy(waveform_np).unsqueeze(0)
 
     try:
-        # Run inference in a no_grad context for efficiency
         with torch.no_grad():
-            hyps = asr_model.transcribe([waveform_np], batch_size=1)
+            # Use the model's streaming transcription method
+            hypotheses, next_state, next_context = asr_model.transcribe_stream(
+                audio=waveform_tensor,
+                state=state,
+                context=context
+            )
+        if hypotheses and hypotheses[0]:
+            return hypotheses[0], next_state, next_context
+        return "", next_state, next_context
         
-        # Check if we got a valid, non-empty result
-        if hyps and len(hyps) > 0:
-            hypothesis = hyps[0]
-            
-            if hasattr(hypothesis, 'text'):
-                text = hypothesis.text
-                print(f"Transcription result: '{text}'")
-                return text
-            elif isinstance(hypothesis, str):
-                print(f"Transcription result: '{hypothesis}'")
-                return hypothesis
-
-        return ""
-
     except Exception as e:
-        print(f"Transcription error: {e}")
-        return ""
+        print(f"Streaming transcription error: {e}")
+        return "", state, context
+
 
 # --------------------------------------------------------------
 class SpeechBuffer:
-    """Buffer that handles voice activity detection and speech segmentation"""
+    """Buffer that handles voice activity detection and speech segmentation. (Largely unchanged)"""
     
     def __init__(self, sample_rate, frame_duration_ms, silence_timeout, min_speech_duration):
         self.sample_rate = sample_rate
@@ -109,23 +114,19 @@ class SpeechBuffer:
                     self.speech_start_time = current_time
                 
                 self.last_voice_time = current_time
+                results.append(("frame", frame)) # Pass the frame for transcription buffer
                 
-            else:
+            else: # Not speech
                 if self.is_speaking:
                     # Check if we've had enough silence to consider speech ended
                     if current_time - self.last_voice_time > self.silence_timeout:
-                        # Speech has ended
                         self.is_speaking = False
                         # Check if the speech was long enough to be valid
                         if self.last_voice_time - self.speech_start_time >= self.min_speech_duration:
                             results.append(("speech_end", None))
-            
-            # If we're speaking, add the frame to the speech buffer
-            if self.is_speaking:
-                results.append(("frame", frame))
         
         return results
-    
+        
     def clear(self):
         """Clear the buffer"""
         self.buffer = bytearray()
@@ -134,12 +135,13 @@ class SpeechBuffer:
         self.last_voice_time = None
 
 # --------------------------------------------------------------
+# REVISED: Main handler with streaming logic
 async def recognize(websocket):
-    """Handles a single client connection."""
+    """Handles a single client connection with real-time streaming."""
     print("Client connected.")
     loop = asyncio.get_running_loop()
     
-    # Initialize speech buffer
+    # Initialize speech buffer for VAD
     speech_buffer = SpeechBuffer(
         sample_rate=SAMPLE_RATE,
         frame_duration_ms=FRAME_DURATION_MS,
@@ -147,81 +149,73 @@ async def recognize(websocket):
         min_speech_duration=MIN_SPEECH_DURATION
     )
     
-    current_speech = bytearray()
-    last_partial_time = time.time()
-    last_transcript = ""
+    # Buffer for accumulating audio for the ASR model
+    transcription_buffer = bytearray()
     
+    # State for the streaming ASR model
+    asr_state = None
+    asr_context = None
+
     try:
         async for msg in websocket:
-            if isinstance(msg, bytes):
-                # Add audio to buffer and process for VAD
-                speech_buffer.add_audio(msg)
-                events = speech_buffer.process_frames()
-                
-                for event_type, data in events:
-                    if event_type == "frame":
-                        # Add frame to current speech segment
-                        current_speech.extend(data)
-                    elif event_type == "speech_end":
-                        # Process the completed speech segment
-                        if current_speech:
-                            audio_data = bytes(current_speech)
-                            current_speech.clear()
-                            
-                            # Transcribe the speech segment
-                            text = await loop.run_in_executor(
-                                pool, partial(transcribe_audio, audio_data)
-                            )
-                            
-                            if text:
-                                await websocket.send(json.dumps({
-                                    "transcript": text,
-                                    "is_final": True
-                                }))
-                            last_transcript = text  # Update last transcript after final
+            if not isinstance(msg, bytes):
+                continue
 
-                # Check for partial transcription if still speaking
-                if speech_buffer.is_speaking:
-                    current_time = time.time()
-                    if current_time - last_partial_time >= PARTIAL_INTERVAL and len(current_speech) >= MIN_PARTIAL_BYTES:
-                        audio_data = bytes(current_speech)
-                        text = await loop.run_in_executor(
-                            pool, partial(transcribe_audio, audio_data)
+            # 1. Add audio to VAD buffer and detect speech events
+            speech_buffer.add_audio(msg)
+            events = speech_buffer.process_frames()
+            
+            for event_type, data in events:
+                if event_type == "frame":
+                    # If it's a speech frame, add it to our transcription buffer
+                    transcription_buffer.extend(data)
+                    
+                    # 2. If transcription buffer is full, process it for an interim result
+                    if len(transcription_buffer) >= TRANSCRIPTION_CHUNK_BYTES:
+                        audio_chunk = bytes(transcription_buffer)
+                        transcription_buffer.clear()
+
+                        # Run streaming transcription in a separate thread
+                        text, asr_state, asr_context = await loop.run_in_executor(
+                            pool, partial(transcribe_stream_chunk, audio_chunk, asr_state, asr_context)
                         )
-                        
-                        if text and text != last_transcript:
-                            print(f"Partial transcription: '{text}'")
+
+                        if text:
                             await websocket.send(json.dumps({
                                 "transcript": text,
                                 "is_final": False
                             }))
-                            last_transcript = text
+
+                elif event_type == "speech_end":
+                    # 3. VAD detected end of speech. Process remaining audio.
+                    if transcription_buffer:
+                        audio_chunk = bytes(transcription_buffer)
+                        transcription_buffer.clear()
                         
-                        last_partial_time = current_time
-            
-            # Handle JSON messages for control
-            elif isinstance(msg, str):
-                data = json.loads(msg)
-                if data.get("action") == "stop":
-                    break
+                        text, _, _ = await loop.run_in_executor(
+                            pool, partial(transcribe_stream_chunk, audio_chunk, asr_state, asr_context)
+                        )
+                    else:
+                        # If buffer is empty, we still might have a final hypothesis
+                        text, _, _ = await loop.run_in_executor(
+                            pool, partial(transcribe_stream_chunk, b'', asr_state, asr_context)
+                        )
+
+                    if text:
+                        print(f"Final Transcript: '{text}'")
+                        await websocket.send(json.dumps({
+                            "transcript": text,
+                            "is_final": True
+                        }))
+
+                    # 4. Reset ASR state for the next utterance
+                    asr_state, asr_context = None, None
 
     except websockets.exceptions.ConnectionClosed as e:
         print(f"Connection closed: {e.reason} (code: {e.code})")
     except Exception as e:
         print(f"An error occurred: {e}")
     finally:
-        # Process any remaining speech when the client disconnects
-        if current_speech:
-            print("Processing remaining speech...")
-            text = await loop.run_in_executor(
-                pool, partial(transcribe_audio, bytes(current_speech))
-            )
-            if text:
-                await websocket.send(json.dumps({
-                    "transcript": text,
-                    "is_final": True,
-                    "is_complete": True
-                }))
         print("Client disconnected.")
 
 # --------------------------------------------------------------

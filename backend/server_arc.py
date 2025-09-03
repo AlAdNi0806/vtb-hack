@@ -11,7 +11,7 @@ from collections import deque
 import time
 
 # --- Configuration ---
-MODEL_NAME = "nvidia/stt_ru_conformer_transducer_large"
+MODEL_NAME = "stt_ru_fastconformer_hybrid_large_pc"  # Changed to model with punctuation and capitalization for better sentence end prediction
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8765
 SAMPLE_RATE = 16000
@@ -20,10 +20,13 @@ FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000)  # Frame size in sample
 VAD_AGGRESSIVENESS = 2  # 0-3, with 3 being the most aggressive
 SILENCE_TIMEOUT = 1.5  # Seconds of silence to consider speech ended
 MIN_SPEECH_DURATION = 0.5  # Minimum speech duration to consider it valid speech
+PARTIAL_INTERVAL = 0.5  # Interval in seconds to send partial transcripts
+MIN_PARTIAL_DURATION = 0.5  # Minimum audio duration in seconds for partial transcription
+MIN_PARTIAL_BYTES = int(SAMPLE_RATE * 2 * MIN_PARTIAL_DURATION)  # 16-bit audio
 
 # --- Global Resources ---
 print("Loading NeMo ASR model...")
-asr_model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained(MODEL_NAME)
+asr_model = nemo_asr.models.EncDecHybridRNNTCTCModel.from_pretrained(MODEL_NAME)  # Use hybrid model for P&C
 pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
 print("Model loaded and ready.")
@@ -145,6 +148,8 @@ async def recognize(websocket):
     )
     
     current_speech = bytearray()
+    last_partial_time = time.time()
+    last_transcript = ""
     
     try:
         async for msg in websocket:
@@ -173,6 +178,26 @@ async def recognize(websocket):
                                     "transcript": text,
                                     "is_final": True
                                 }))
+                            last_transcript = text  # Update last transcript after final
+
+                # Check for partial transcription if still speaking
+                if speech_buffer.is_speaking:
+                    current_time = time.time()
+                    if current_time - last_partial_time >= PARTIAL_INTERVAL and len(current_speech) >= MIN_PARTIAL_BYTES:
+                        audio_data = bytes(current_speech)
+                        text = await loop.run_in_executor(
+                            pool, partial(transcribe_audio, audio_data)
+                        )
+                        
+                        if text and text != last_transcript:
+                            print(f"Partial transcription: '{text}'")
+                            await websocket.send(json.dumps({
+                                "transcript": text,
+                                "is_final": False
+                            }))
+                            last_transcript = text
+                        
+                        last_partial_time = current_time
             
             # Handle JSON messages for control
             elif isinstance(msg, str):

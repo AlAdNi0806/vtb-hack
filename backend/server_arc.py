@@ -11,7 +11,7 @@ from collections import deque
 import time
 
 # --- Configuration ---
-MODEL_NAME = "stt_ru_fastconformer_hybrid_large_pc"  # Changed to model with punctuation and capitalization for better sentence end prediction
+MODEL_NAME = " nvidia/stt_ru_fastconformer_hybrid_large_pc"  # Changed to model with punctuation and capitalization for better sentence end prediction
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8765
 SAMPLE_RATE = 16000

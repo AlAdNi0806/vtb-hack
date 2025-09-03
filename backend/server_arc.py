@@ -18,11 +18,11 @@ MIN_SPEECH_DURATION = 0.5
 PARTIAL_INTERVAL    = 0.40
 SENTENCE_END_TOKENS = {".", "?", "!", "…"}          # triggers faster endpoint
 CEREBRAS_URL        = "https://api.cerebras.ai/v1/chat/completions"
-CEREBRAS_KEY        = "YOUR_CEREBRAS_API_KEY"        # export or hard-code
+CEREBRAS_KEY        = "csk-6kjk8yewdwdhkc8ndj5686rcj2te3tfyyr6dw669knd3wy33"        # export or hard-code
 SYSTEM_PROMPT       = "You are a helpful assistant. Answer concisely."
 
 print("Loading ASR model…")
-asr_model = nemo.asr.models.EncDecRNNTBPEModel.from_pretrained(MODEL_NAME)
+asr_model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained(MODEL_NAME)
 
 print("Loading punctuation model…")
 punctuator = pipeline("token-classification", PUNC_MODEL, aggregation_strategy="none") \

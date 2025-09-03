@@ -1,120 +1,105 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"/>
-<title>Real-Time Streaming ASR</title>
-<style>
-  body{font-family:sans-serif;display:flex;flex-direction:column;align-items:center}
-  #caption{
-    border:1px solid #ccc;padding:10px;margin-top:20px;
-    width:80%;min-height:100px;white-space:pre-wrap;background:#f9f9f9}
-  button{font-size:1.2em;padding:10px 20px;margin:10px}
-</style>
+  <meta charset="UTF-8"/>
+  <title>Real-Time Conversation</title>
+  <style>
+    body{font-family:Arial;display:flex;flex-direction:column;align-items:center;margin:0}
+    #log{border:1px solid #ccc;width:90%;max-width:600px;height:60vh;overflow-y:auto;padding:10px}
+    .user{color:#0066cc}
+    .ai{color:#009900}
+    button{margin:10px;padding:10px 20px;font-size:1.2em}
+  </style>
 </head>
 <body>
-  <h1>Real-Time Speech-to-Text</h1>
+  <h1>Conversation</h1>
+  <div id="log"></div>
   <button id="toggleBtn">Start</button>
-  <div id="caption">Press Start to begin…</div>
 
 <script>
-const SERVER_URL = 'ws://localhost:8765';   // <-- change if needed
-const toggleBtn  = document.getElementById('toggleBtn');
-const captionDiv = document.getElementById('caption');
+const SERVER_URL = 'ws://localhost:8765';
+const logDiv = document.getElementById('log');
+const btn    = document.getElementById('toggleBtn');
 
-let audioCtx, mediaStream, socket, workletNode;
-let running = false;
+let socket, audioCtx, workletNode, stream, running=false;
 
-/* ===  RESAMPLER WORKLET STRING  ===
-   We embed the processor as a Blob so the page is 100 % self-contained. */
-const workletCode = `
+/* --- AudioWorklet resampler (same as before) --- */
+const workletBlob = new Blob([`
 class Resampler extends AudioWorkletProcessor {
-  constructor(options) {
-    super();
-    this.targetRate = options.processorOptions.targetRate || 16000;
-    this.ratio = sampleRate / this.targetRate;
-    this.buffer = new Float32Array(0);
-  }
-  process(inputs, outputs, params) {
-    const input = inputs[0][0];          // mono
-    const old = this.buffer;
-    this.buffer = new Float32Array(old.length + input.length);
-    this.buffer.set(old);
-    this.buffer.set(input, old.length);
-
-    // Down-sample by simple drop (good enough for demo)
-    const needed = Math.floor(this.buffer.length / this.ratio);
-    if (!needed) return true;
-    const out = new Int16Array(needed);
-    for (let i = 0; i < needed; ++i) {
-      const idx = Math.floor(i * this.ratio);
-      const s = this.buffer[idx];
-      out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;   // float → int16
+  constructor(opts){super(); this.ratio = sampleRate/16000; this.buf=new Float32Array(0)}
+  process(inputs,_,__){
+    const inp = inputs[0][0], len=inp.length;
+    const tmp = new Float32Array(this.buf.length+len);
+    tmp.set(this.buf); tmp.set(inp,this.buf.length); this.buf=tmp;
+    const needed = Math.floor(this.buf.length/this.ratio);
+    if(!needed) return true;
+    const out=new Int16Array(needed);
+    for(let i=0;i<needed;i++){
+      const v=this.buf[Math.floor(i*this.ratio)];
+      out[i]=v<0? v*0x8000 : v*0x7FFF;
     }
-    this.buffer = this.buffer.slice(needed * this.ratio);
+    this.buf=this.buf.slice(needed*this.ratio);
     this.port.postMessage(out.buffer);
     return true;
   }
 }
-registerProcessor('resampler', Resampler);
-`;
-
-/* ===  MAIN LOGIC  === */
-toggleBtn.onclick = async () => {
-  if (running) await stop();
-  else         await start();
-};
+registerProcessor('resampler',Resampler);
+`], {type:'application/javascript'});
 
 async function start() {
-  try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({audio:true});
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const blob = new Blob([workletCode], {type:'application/javascript'});
-    const url  = URL.createObjectURL(blob);
-    await audioCtx.audioWorklet.addModule(url);
-    URL.revokeObjectURL(url);
+  stream = await navigator.mediaDevices.getUserMedia({audio:true});
+  audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  const url = URL.createObjectURL(workletBlob);
+  await audioCtx.audioWorklet.addModule(url);
+  URL.revokeObjectURL(url);
 
-    workletNode = new AudioWorkletNode(audioCtx, 'resampler',
-                                       {processorOptions:{targetRate:16000}});
-    const source = audioCtx.createMediaStreamSource(mediaStream);
-    source.connect(workletNode);
+  workletNode = new AudioWorkletNode(audioCtx,'resampler');
+  const src = audioCtx.createMediaStreamSource(stream);
+  src.connect(workletNode);
 
-    socket = new WebSocket(SERVER_URL);
-    socket.binaryType = 'arraybuffer';
+  socket = new WebSocket(SERVER_URL);
+  socket.binaryType = 'arraybuffer';
 
-    socket.onopen = () => {
-      workletNode.port.onmessage = e => {
-        if (socket.readyState === WebSocket.OPEN)
-          socket.send(e.data);   // e.data is Int16Array audio
-      };
-      toggleBtn.textContent = 'Stop';
-      captionDiv.textContent = 'Listening…';
-      running = true;
-    };
+  socket.onopen = () => {
+    workletNode.port.onmessage = e => socket.send(e.data);
+    btn.textContent = 'Stop';
+    running=true;
+  };
 
-    socket.onmessage = e => {
-      const {transcript, is_final} = JSON.parse(e.data);
-      if (is_final) {
-        captionDiv.textContent += transcript + ' ';
-      } else {
-        captionDiv.textContent = captionDiv.textContent.replace(/\s*\[.*?\]\s*$/, '') +
-                                 `[${transcript}]`;
-      }
-    };
+  socket.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'asr_final') append('user', msg.text);
+    else if (msg.type === 'ai_partial') append('ai', msg.text, true);
+    else if (msg.type === 'ai_final') append('ai', msg.text, false, true);
+  };
 
-    socket.onclose = stop;
-  } catch(err) {
-    alert(err);
+  socket.onclose = stop;
+}
+
+function stop() {
+  running=false; btn.textContent='Start';
+  if(workletNode) workletNode.disconnect();
+  if(stream) stream.getTracks().forEach(t=>t.stop());
+  if(audioCtx) audioCtx.close();
+  if(socket) socket.close();
+}
+
+function append(role,text,partial=false,final=false){
+  const last = logDiv.lastElementChild;
+  const cls = role==='user'?'user':'ai';
+  if(partial && last && last.classList.contains(cls)){
+    last.textContent = last.textContent.replace(/\s*\[.*?\]\s*$/,'') + `[${text}]`;
+  }else if(partial){
+    logDiv.insertAdjacentHTML('beforeend', `<div class="${cls}">[${text}]</div>`);
+  }else{
+    if(last && last.classList.contains(cls) && last.textContent.endsWith(']'))
+      last.remove();
+    logDiv.insertAdjacentHTML('beforeend', `<div class="${cls}">${text}</div>`);
   }
+  logDiv.scrollTop = logDiv.scrollHeight;
 }
 
-async function stop() {
-  running = false;
-  toggleBtn.textContent = 'Start';
-  if (workletNode)  workletNode.disconnect();
-  if (mediaStream)  mediaStream.getTracks().forEach(t => t.stop());
-  if (audioCtx)     audioCtx.close();
-  if (socket && socket.readyState === WebSocket.OPEN) socket.close();
-}
+btn.onclick = () => running? stop() : start();
 </script>
 </body>
 </html>

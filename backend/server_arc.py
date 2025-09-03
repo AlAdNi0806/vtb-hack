@@ -11,7 +11,7 @@ from collections import deque
 import time
 
 # --- Configuration ---
-MODEL_NAME = " nvidia/stt_ru_fastconformer_hybrid_large_pc"  # Changed to model with punctuation and capitalization for better sentence end prediction
+MODEL_NAME = "nvidia/stt_ru_fastconformer_hybrid_large_pc"  # Changed to model with punctuation and capitalization for better sentence end prediction
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8765
 SAMPLE_RATE = 16000
@@ -22,11 +22,11 @@ SILENCE_TIMEOUT = 1.5  # Seconds of silence to consider speech ended
 MIN_SPEECH_DURATION = 0.5  # Minimum speech duration to consider it valid speech
 PARTIAL_INTERVAL = 0.5  # Interval in seconds to send partial transcripts
 MIN_PARTIAL_DURATION = 0.5  # Minimum audio duration in seconds for partial transcription
-MIN_PARTIAL_BYTES = int(SAMPLE_RATE * 2 * MIN_PARTIAL_DURATION)  # 16-bit audio
+MIN_PARTIAL_BYTES = int(SAMPLE_RATE * 2 * MIN_PARTIAL_DURATION)
 
 # --- Global Resources ---
 print("Loading NeMo ASR model...")
-asr_model = nemo_asr.models.EncDecHybridRNNTCTCModel.from_pretrained(MODEL_NAME)  # Use hybrid model for P&C
+asr_model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained(MODEL_NAME)
 pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
 print("Model loaded and ready.")

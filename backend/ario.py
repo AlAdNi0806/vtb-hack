@@ -2,15 +2,22 @@ import asyncio
 import websockets
 import json
 import torch
+import nemo.collections.asr as nemo_asr
 import numpy as np
 import time
 
-# === CONFIG ===
+# Configuration
+MODEL_NAME        = "nvidia/parakeet-tdt-0.6b-v3"
+SERVER_HOST       = "0.0.0.0"
+SERVER_PORT       = 8765
 PARTIAL_INTERVAL   = 0.4      # seconds between partial emits
 SILENCE_TIMEOUT    = 0.8      # how long silence means end-of-utterance
 SAMPLE_RATE        = 16000
 MIN_CHUNK_SAMPLES  = 8000     # 0.5s worth of audio
-# ==============
+
+print(f"Loading model {MODEL_NAME}…")
+asr_model = nemo_asr.models.ASRModel.from_pretrained(model_name=MODEL_NAME)
+print("Model loaded.")
 
 # Convert PCM16 → float32 numpy
 def audio_bytes_to_np(pcm_bytes: bytes) -> np.ndarray:

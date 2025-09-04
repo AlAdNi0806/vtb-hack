@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<title>Real-Time Streaming ASR</title>
+<title>Real-Time Speech-to-Text</title>
 <style>
   body {
     font-family: sans-serif;
@@ -39,6 +39,9 @@
     color: #555;
     font-size: 0.9em;
   }
+  .partial {
+    color: #777;
+  }
 </style>
 </head>
 <body>
@@ -47,14 +50,15 @@
   <div id="caption">Press Start to begin…</div>
 
 <script>
-const SERVER_URL = 'ws://192.168.0.176:8765';   // <-- adjust to your server
+const SERVER_URL = 'ws://192.168.0.176:8765';  // <-- adjust to your server
 const toggleBtn  = document.getElementById('toggleBtn');
 const captionDiv = document.getElementById('caption');
 
 let audioCtx, mediaStream, socket, workletNode;
 let running = false;
+let finalText = "";   // accumulated final transcript
 
-/* === Embedded Worklet for resampling === */
+/* === Resampler Worklet === */
 const workletCode = `
 class Resampler extends AudioWorkletProcessor {
   constructor(options) {
@@ -119,23 +123,23 @@ async function start() {
       };
       toggleBtn.textContent = 'Stop';
       captionDiv.textContent = 'Listening…';
+      finalText = "";
       running = true;
     };
 
     socket.onmessage = e => {
-      const { transcript, segments, is_final } = JSON.parse(e.data);
-      if (is_final && transcript) {
-        let html = "";
-        if (segments && segments.length > 0) {
-          for (const seg of segments) {
-            html += `<div><span class="segment-time">[${seg.start.toFixed(1)}s–${seg.end.toFixed(1)}s]</span> ${seg.segment}</div>`;
-          }
-        } else {
-          html += transcript + " ";
-        }
-        captionDiv.innerHTML += html;
-        captionDiv.scrollTop = captionDiv.scrollHeight;
+      const { transcript, is_final } = JSON.parse(e.data);
+
+      if (is_final) {
+        // append final transcript permanently
+        finalText += transcript + " ";
+        captionDiv.innerHTML = finalText;
+      } else {
+        // partial transcript shown in-place
+        captionDiv.innerHTML = finalText + `<span class="partial">[${transcript}]</span>`;
       }
+
+      captionDiv.scrollTop = captionDiv.scrollHeight;
     };
 
     socket.onclose = stop;

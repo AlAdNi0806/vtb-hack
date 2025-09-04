@@ -3,6 +3,7 @@ import websockets
 import json
 import torch
 import nemo.collections.asr as nemo_asr
+import numpy as np
 
 # Configuration
 MODEL_NAME        = "nvidia/parakeet-tdt-0.6b-v3"
@@ -12,6 +13,10 @@ SERVER_PORT       = 8765
 print(f"Loading model {MODEL_NAME}…")
 asr_model = nemo_asr.models.ASRModel.from_pretrained(model_name=MODEL_NAME)
 print("Model loaded.")
+
+def audio_bytes_to_np(pcm_bytes: bytes, sr: int = 16000) -> np.ndarray:
+    pcm_i16 = np.frombuffer(pcm_bytes, dtype=np.int16)
+    return pcm_i16.astype(np.float32) / 32768.0
 
 async def recognize(websocket):
     print("Client connected.")
@@ -30,8 +35,10 @@ async def recognize(websocket):
                 audio = bytes(buffer)
                 buffer.clear()
 
+                waveform = audio_bytes_to_np(audio) 
+
                 # Partial results (timestamps included)
-                output = asr_model.transcribe([audio], timestamps=True)[0]
+                output = asr_model.transcribe([waveform], timestamps=True)[0]
                 text = output.text
                 segments = output.timestamp.get('segment', [])
 

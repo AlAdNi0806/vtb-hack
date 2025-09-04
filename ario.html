@@ -1,694 +1,157 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ario - AI Voice Assistant</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .header {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            padding: 1rem 2rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-        }
-
-        .header h1 {
-            color: white;
-            font-size: 2rem;
-            font-weight: 300;
-        }
-
-        .status-bar {
-            display: flex;
-            gap: 1rem;
-            margin-top: 0.5rem;
-        }
-
-        .status-indicator {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.25rem 0.75rem;
-            border-radius: 20px;
-            font-size: 0.875rem;
-            font-weight: 500;
-        }
-
-        .status-connected {
-            background: rgba(34, 197, 94, 0.2);
-            color: #22c55e;
-            border: 1px solid rgba(34, 197, 94, 0.3);
-        }
-
-        .status-disconnected {
-            background: rgba(239, 68, 68, 0.2);
-            color: #ef4444;
-            border: 1px solid rgba(239, 68, 68, 0.3);
-        }
-
-        .status-listening {
-            background: rgba(59, 130, 246, 0.2);
-            color: #3b82f6;
-            border: 1px solid rgba(59, 130, 246, 0.3);
-        }
-
-        .status-thinking {
-            background: rgba(168, 85, 247, 0.2);
-            color: #a855f7;
-            border: 1px solid rgba(168, 85, 247, 0.3);
-        }
-
-        .main-container {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            max-width: 1200px;
-            margin: 0 auto;
-            width: 100%;
-            padding: 2rem;
-            gap: 2rem;
-        }
-
-        .conversation-container {
-            flex: 1;
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 20px;
-            padding: 2rem;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
-            overflow-y: auto;
-            max-height: 60vh;
-        }
-
-        .conversation-title {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: #374151;
-            margin-bottom: 1.5rem;
-            text-align: center;
-        }
-
-        .message {
-            margin-bottom: 1.5rem;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .message-user {
-            align-items: flex-end;
-        }
-
-        .message-ai {
-            align-items: flex-start;
-        }
-
-        .message-content {
-            max-width: 80%;
-            padding: 1rem 1.5rem;
-            border-radius: 20px;
-            font-size: 1rem;
-            line-height: 1.5;
-            word-wrap: break-word;
-        }
-
-        .message-user .message-content {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border-bottom-right-radius: 5px;
-        }
-
-        .message-ai .message-content {
-            background: #f3f4f6;
-            color: #374151;
-            border-bottom-left-radius: 5px;
-        }
-
-        .message-timestamp {
-            font-size: 0.75rem;
-            color: #9ca3af;
-            margin-top: 0.5rem;
-            padding: 0 0.5rem;
-        }
-
-        .current-input {
-            background: rgba(59, 130, 246, 0.1);
-            border: 2px dashed #3b82f6;
-            border-radius: 15px;
-            padding: 1rem;
-            margin-bottom: 1rem;
-            min-height: 60px;
-            display: flex;
-            align-items: center;
-            font-style: italic;
-            color: #3b82f6;
-        }
-
-        .controls-container {
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 20px;
-            padding: 2rem;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
-            text-align: center;
-        }
-
-        .talk-button {
-            width: 120px;
-            height: 120px;
-            border-radius: 50%;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 1rem;
-            font-size: 2.5rem;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .talk-button:not(.recording) {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
-        }
-
-        .talk-button:not(.recording):hover {
-            transform: translateY(-2px);
-            box-shadow: 0 15px 40px rgba(102, 126, 234, 0.6);
-        }
-
-        .talk-button.recording {
-            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-            color: white;
-            animation: pulse 2s infinite;
-            box-shadow: 0 10px 30px rgba(239, 68, 68, 0.4);
-        }
-
-        .talk-button.disabled {
-            background: #9ca3af;
-            cursor: not-allowed;
-            transform: none !important;
-            box-shadow: none !important;
-        }
-
-        @keyframes pulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-            100% { transform: scale(1); }
-        }
-
-        .button-text {
-            font-size: 1rem;
-            font-weight: 600;
-            color: #374151;
-        }
-
-        .clear-button {
-            background: #f3f4f6;
-            border: 2px solid #e5e7eb;
-            border-radius: 10px;
-            padding: 0.75rem 1.5rem;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            font-size: 0.875rem;
-            font-weight: 500;
-            color: #6b7280;
-            margin-top: 1rem;
-        }
-
-        .clear-button:hover {
-            background: #e5e7eb;
-            border-color: #d1d5db;
-        }
-
-        .typing-indicator {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            color: #6b7280;
-            font-style: italic;
-        }
-
-        .typing-dots {
-            display: flex;
-            gap: 0.25rem;
-        }
-
-        .typing-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: #6b7280;
-            animation: typing 1.4s infinite ease-in-out;
-        }
-
-        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
-        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
-
-        @keyframes typing {
-            0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
-            40% { transform: scale(1); opacity: 1; }
-        }
-
-        .error-message {
-            background: rgba(239, 68, 68, 0.1);
-            border: 1px solid rgba(239, 68, 68, 0.3);
-            color: #dc2626;
-            padding: 1rem;
-            border-radius: 10px;
-            margin-bottom: 1rem;
-            text-align: center;
-        }
-
-        @media (max-width: 768px) {
-            .main-container {
-                padding: 1rem;
-                gap: 1rem;
-            }
-            
-            .conversation-container {
-                max-height: 50vh;
-                padding: 1rem;
-            }
-            
-            .message-content {
-                max-width: 90%;
-            }
-            
-            .talk-button {
-                width: 100px;
-                height: 100px;
-                font-size: 2rem;
-            }
-        }
-    </style>
+<meta charset="UTF-8"/>
+<title>Real-Time Streaming ASR</title>
+<style>
+  body {
+    font-family: sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+  }
+  #caption {
+    border: 1px solid #ccc;
+    padding: 12px;
+    margin-top: 20px;
+    width: 80%;
+    min-height: 120px;
+    white-space: pre-wrap;
+    background: #f9f9f9;
+    font-size: 1.1em;
+    line-height: 1.5em;
+  }
+  button {
+    font-size: 1.2em;
+    padding: 10px 24px;
+    margin: 10px;
+    border: none;
+    border-radius: 6px;
+    background: #0078d7;
+    color: white;
+    cursor: pointer;
+  }
+  button:hover {
+    background: #005ea1;
+  }
+  .segment-time {
+    color: #555;
+    font-size: 0.9em;
+  }
+</style>
 </head>
 <body>
-    <div class="header">
-        <h1>🤖 Ario - AI Voice Assistant</h1>
-        <div class="status-bar">
-            <div id="connectionStatus" class="status-indicator status-disconnected">
-                <span>●</span> Disconnected
-            </div>
-            <div id="listeningStatus" class="status-indicator" style="display: none;">
-                <span>🎤</span> Listening
-            </div>
-            <div id="thinkingStatus" class="status-indicator" style="display: none;">
-                <span>🧠</span> AI Thinking
-            </div>
-        </div>
-    </div>
+  <h1>Real-Time Speech-to-Text</h1>
+  <button id="toggleBtn">Start</button>
+  <div id="caption">Press Start to begin…</div>
 
-    <div class="main-container">
-        <div class="conversation-container">
-            <div class="conversation-title">💬 Conversation</div>
-            <div id="currentInput" class="current-input" style="display: none;">
-                <span id="currentText">Start speaking...</span>
-            </div>
-            <div id="conversation"></div>
-            <div id="typingIndicator" class="typing-indicator" style="display: none;">
-                <span>AI is responding</span>
-                <div class="typing-dots">
-                    <div class="typing-dot"></div>
-                    <div class="typing-dot"></div>
-                    <div class="typing-dot"></div>
-                </div>
-            </div>
-        </div>
+<script>
+const SERVER_URL = 'ws://192.168.0.176:8765';   // <-- adjust to your server
+const toggleBtn  = document.getElementById('toggleBtn');
+const captionDiv = document.getElementById('caption');
 
-        <div class="controls-container">
-            <div id="errorMessage" class="error-message" style="display: none;"></div>
-            
-            <button id="talkButton" class="talk-button disabled">
-                <span id="buttonIcon">🎤</span>
-            </button>
-            
-            <div class="button-text" id="buttonText">Connecting...</div>
-            
-            <button id="clearButton" class="clear-button">
-                🗑️ Clear Conversation
-            </button>
-        </div>
-    </div>
+let audioCtx, mediaStream, socket, workletNode;
+let running = false;
 
-    <script>
-        class ArioVoiceAssistant {
-            constructor() {
-                this.ws = null;
-                this.isRecording = false;
-                this.isConnected = false;
-                this.mediaRecorder = null;
-                this.stream = null;
-                this.currentTranscription = '';
-                this.conversation = [];
-                this.silenceTimer = null;
-                this.silenceThreshold = 2000; // 2 seconds of silence
-                this.isProcessingAI = false;
-                
-                this.initializeElements();
-                this.connectWebSocket();
-                this.setupEventListeners();
-            }
+/* === Embedded Worklet for resampling === */
+const workletCode = `
+class Resampler extends AudioWorkletProcessor {
+  constructor(options) {
+    super();
+    this.targetRate = options.processorOptions.targetRate || 16000;
+    this.ratio = sampleRate / this.targetRate;
+    this.buffer = new Float32Array(0);
+  }
+  process(inputs) {
+    const input = inputs[0][0];
+    if (!input) return true;
 
-            initializeElements() {
-                this.talkButton = document.getElementById('talkButton');
-                this.buttonText = document.getElementById('buttonText');
-                this.buttonIcon = document.getElementById('buttonIcon');
-                this.connectionStatus = document.getElementById('connectionStatus');
-                this.listeningStatus = document.getElementById('listeningStatus');
-                this.thinkingStatus = document.getElementById('thinkingStatus');
-                this.conversation = document.getElementById('conversation');
-                this.currentInput = document.getElementById('currentInput');
-                this.currentText = document.getElementById('currentText');
-                this.typingIndicator = document.getElementById('typingIndicator');
-                this.errorMessage = document.getElementById('errorMessage');
-                this.clearButton = document.getElementById('clearButton');
-            }
+    const old = this.buffer;
+    this.buffer = new Float32Array(old.length + input.length);
+    this.buffer.set(old);
+    this.buffer.set(input, old.length);
 
-            setupEventListeners() {
-                this.talkButton.addEventListener('click', () => this.toggleRecording());
-                this.clearButton.addEventListener('click', () => this.clearConversation());
-            }
+    const needed = Math.floor(this.buffer.length / this.ratio);
+    if (!needed) return true;
 
-            connectWebSocket() {
-                const clientId = Math.random().toString(36).substring(7);
-                this.ws = new WebSocket(`ws://192.168.0.176:8000/ws/${clientId}`);
+    const out = new Int16Array(needed);
+    for (let i = 0; i < needed; ++i) {
+      const idx = Math.floor(i * this.ratio);
+      const s = this.buffer[idx];
+      out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+    this.buffer = this.buffer.slice(needed * this.ratio);
+    this.port.postMessage(out.buffer);
+    return true;
+  }
+}
+registerProcessor('resampler', Resampler);
+`;
 
-                this.ws.onopen = () => {
-                    console.log('Connected to Ario backend');
-                    this.isConnected = true;
-                    this.updateConnectionStatus(true);
-                    this.updateButtonState();
-                };
+/* === Main logic === */
+toggleBtn.onclick = async () => {
+  if (running) await stop();
+  else         await start();
+};
 
-                this.ws.onmessage = (event) => {
-                    const data = JSON.parse(event.data);
-                    this.handleWebSocketMessage(data);
-                };
+async function start() {
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const blob = new Blob([workletCode], { type: 'application/javascript' });
+    const url  = URL.createObjectURL(blob);
+    await audioCtx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
 
-                this.ws.onclose = () => {
-                    console.log('Disconnected from Ario backend');
-                    this.isConnected = false;
-                    this.updateConnectionStatus(false);
-                    this.updateButtonState();
-                };
+    workletNode = new AudioWorkletNode(audioCtx, 'resampler',
+                                       { processorOptions: { targetRate: 16000 } });
+    const source = audioCtx.createMediaStreamSource(mediaStream);
+    source.connect(workletNode);
 
-                this.ws.onerror = (error) => {
-                    console.error('WebSocket error:', error);
-                    this.showError('Connection failed. Please check if the backend is running.');
-                };
-            }
+    socket = new WebSocket(SERVER_URL);
+    socket.binaryType = 'arraybuffer';
 
-            handleWebSocketMessage(data) {
-                switch (data.type) {
-                    case 'transcription':
-                        this.handleTranscription(data);
-                        break;
-                    case 'ai_response':
-                        this.handleAIResponse(data);
-                        break;
-                    case 'ai_response_complete':
-                        this.handleAIResponseComplete();
-                        break;
-                    case 'status':
-                        console.log('Status:', data.message);
-                        break;
-                }
-            }
+    socket.onopen = () => {
+      workletNode.port.onmessage = e => {
+        if (socket.readyState === WebSocket.OPEN)
+          socket.send(e.data);
+      };
+      toggleBtn.textContent = 'Stop';
+      captionDiv.textContent = 'Listening…';
+      running = true;
+    };
 
-            handleTranscription(data) {
-                if (data.is_final) {
-                    this.currentTranscription += ' ' + data.text;
-                    this.updateCurrentInput(this.currentTranscription);
-                    this.resetSilenceTimer();
-                } else {
-                    this.updateCurrentInput(this.currentTranscription + ' ' + data.text);
-                }
-            }
-
-            handleAIResponse(data) {
-                if (data.is_start) {
-                    this.addAIMessage('', true); // Start streaming message
-                }
-                
-                if (data.text) {
-                    this.updateLastAIMessage(data.text);
-                }
-            }
-
-            handleAIResponseComplete() {
-                this.isProcessingAI = false;
-                this.updateThinkingStatus(false);
-                this.typingIndicator.style.display = 'none';
-                this.updateButtonState();
-            }
-
-            resetSilenceTimer() {
-                if (this.silenceTimer) {
-                    clearTimeout(this.silenceTimer);
-                }
-                
-                this.silenceTimer = setTimeout(() => {
-                    if (this.isRecording && this.currentTranscription.trim()) {
-                        this.finishUserInput();
-                    }
-                }, this.silenceThreshold);
-            }
-
-            async finishUserInput() {
-                if (!this.currentTranscription.trim()) return;
-
-                // Stop recording
-                this.stopRecording();
-                
-                // Add user message to conversation
-                this.addUserMessage(this.currentTranscription.trim());
-                
-                // Send to AI
-                this.sendToAI(this.currentTranscription.trim());
-                
-                // Reset current transcription
-                this.currentTranscription = '';
-                this.currentInput.style.display = 'none';
-            }
-
-            sendToAI(text) {
-                this.isProcessingAI = true;
-                this.updateThinkingStatus(true);
-                this.typingIndicator.style.display = 'flex';
-                
-                this.ws.send(JSON.stringify({
-                    type: 'ai_query',
-                    text: text,
-                    conversation_history: this.getConversationHistory()
-                }));
-            }
-
-            getConversationHistory() {
-                return this.conversation.slice(-10); // Last 10 messages for context
-            }
-
-            async toggleRecording() {
-                if (!this.isConnected || this.isProcessingAI) return;
-
-                if (this.isRecording) {
-                    this.stopRecording();
-                } else {
-                    await this.startRecording();
-                }
-            }
-
-            async startRecording() {
-                try {
-                    this.stream = await navigator.mediaDevices.getUserMedia({
-                        audio: {
-                            sampleRate: 16000,
-                            channelCount: 1,
-                            echoCancellation: true,
-                            noiseSuppression: true,
-                            autoGainControl: true,
-                        }
-                    });
-
-                    this.mediaRecorder = new MediaRecorder(this.stream, {
-                        mimeType: 'audio/webm;codecs=opus'
-                    });
-
-                    this.mediaRecorder.ondataavailable = (event) => {
-                        if (event.data.size > 0 && this.ws.readyState === WebSocket.OPEN) {
-                            this.ws.send(event.data);
-                        }
-                    };
-
-                    this.mediaRecorder.start(100);
-                    this.isRecording = true;
-                    this.currentTranscription = '';
-                    
-                    this.ws.send(JSON.stringify({ type: 'start_recording' }));
-                    
-                    this.updateRecordingState(true);
-                    this.currentInput.style.display = 'block';
-                    this.updateCurrentInput('Listening...');
-
-                } catch (error) {
-                    console.error('Error starting recording:', error);
-                    this.showError('Microphone access denied. Please allow microphone permissions.');
-                }
-            }
-
-            stopRecording() {
-                if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-                    this.mediaRecorder.stop();
-                }
-
-                if (this.stream) {
-                    this.stream.getTracks().forEach(track => track.stop());
-                }
-
-                if (this.ws.readyState === WebSocket.OPEN) {
-                    this.ws.send(JSON.stringify({ type: 'stop_recording' }));
-                }
-
-                if (this.silenceTimer) {
-                    clearTimeout(this.silenceTimer);
-                }
-
-                this.isRecording = false;
-                this.updateRecordingState(false);
-            }
-
-            addUserMessage(text) {
-                const messageDiv = document.createElement('div');
-                messageDiv.className = 'message message-user';
-                messageDiv.innerHTML = `
-                    <div class="message-content">${this.escapeHtml(text)}</div>
-                    <div class="message-timestamp">${this.formatTime(new Date())}</div>
-                `;
-                this.conversation.appendChild(messageDiv);
-                this.scrollToBottom();
-                
-                this.conversation.push({ role: 'user', content: text });
-            }
-
-            addAIMessage(text, isStreaming = false) {
-                const messageDiv = document.createElement('div');
-                messageDiv.className = 'message message-ai';
-                messageDiv.innerHTML = `
-                    <div class="message-content" id="lastAIMessage">${this.escapeHtml(text)}</div>
-                    <div class="message-timestamp">${this.formatTime(new Date())}</div>
-                `;
-                this.conversation.appendChild(messageDiv);
-                this.scrollToBottom();
-                
-                if (!isStreaming) {
-                    this.conversation.push({ role: 'assistant', content: text });
-                }
-            }
-
-            updateLastAIMessage(text) {
-                const lastMessage = document.getElementById('lastAIMessage');
-                if (lastMessage) {
-                    lastMessage.textContent = text;
-                    this.scrollToBottom();
-                }
-            }
-
-            updateCurrentInput(text) {
-                this.currentText.textContent = text || 'Listening...';
-            }
-
-            updateConnectionStatus(connected) {
-                if (connected) {
-                    this.connectionStatus.className = 'status-indicator status-connected';
-                    this.connectionStatus.innerHTML = '<span>●</span> Connected';
-                } else {
-                    this.connectionStatus.className = 'status-indicator status-disconnected';
-                    this.connectionStatus.innerHTML = '<span>●</span> Disconnected';
-                }
-            }
-
-            updateRecordingState(recording) {
-                this.listeningStatus.style.display = recording ? 'flex' : 'none';
-                
-                if (recording) {
-                    this.talkButton.classList.add('recording');
-                    this.buttonIcon.textContent = '⏹️';
-                    this.buttonText.textContent = 'Stop Recording';
-                } else {
-                    this.talkButton.classList.remove('recording');
-                    this.buttonIcon.textContent = '🎤';
-                    this.buttonText.textContent = 'Start Talking';
-                }
-            }
-
-            updateThinkingStatus(thinking) {
-                this.thinkingStatus.style.display = thinking ? 'flex' : 'none';
-            }
-
-            updateButtonState() {
-                const canRecord = this.isConnected && !this.isProcessingAI;
-                
-                if (canRecord) {
-                    this.talkButton.classList.remove('disabled');
-                    this.buttonText.textContent = this.isRecording ? 'Stop Recording' : 'Start Talking';
-                } else {
-                    this.talkButton.classList.add('disabled');
-                    if (!this.isConnected) {
-                        this.buttonText.textContent = 'Connecting...';
-                    } else if (this.isProcessingAI) {
-                        this.buttonText.textContent = 'AI Processing...';
-                    }
-                }
-            }
-
-            clearConversation() {
-                this.conversation.innerHTML = '<div class="conversation-title">💬 Conversation</div>';
-                this.conversation = [];
-                this.currentInput.style.display = 'none';
-                this.typingIndicator.style.display = 'none';
-            }
-
-            showError(message) {
-                this.errorMessage.textContent = message;
-                this.errorMessage.style.display = 'block';
-                setTimeout(() => {
-                    this.errorMessage.style.display = 'none';
-                }, 5000);
-            }
-
-            scrollToBottom() {
-                this.conversation.scrollTop = this.conversation.scrollHeight;
-            }
-
-            escapeHtml(text) {
-                const div = document.createElement('div');
-                div.textContent = text;
-                return div.innerHTML;
-            }
-
-            formatTime(date) {
-                return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            }
+    socket.onmessage = e => {
+      const { transcript, segments, is_final } = JSON.parse(e.data);
+      if (is_final && transcript) {
+        let html = "";
+        if (segments && segments.length > 0) {
+          for (const seg of segments) {
+            html += `<div><span class="segment-time">[${seg.start.toFixed(1)}s–${seg.end.toFixed(1)}s]</span> ${seg.segment}</div>`;
+          }
+        } else {
+          html += transcript + " ";
         }
+        captionDiv.innerHTML += html;
+        captionDiv.scrollTop = captionDiv.scrollHeight;
+      }
+    };
 
-        // Initialize the application
-        document.addEventListener('DOMContentLoaded', () => {
-            new ArioVoiceAssistant();
-        });
-    </script>
+    socket.onclose = stop;
+  } catch(err) {
+    alert("Error: " + err);
+  }
+}
+
+async function stop() {
+  running = false;
+  toggleBtn.textContent = 'Start';
+  if (workletNode)  workletNode.disconnect();
+  if (mediaStream)  mediaStream.getTracks().forEach(t => t.stop());
+  if (audioCtx)     audioCtx.close();
+  if (socket && socket.readyState === WebSocket.OPEN) socket.close();
+}
+</script>
 </body>
 </html>

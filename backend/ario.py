@@ -81,3 +81,12 @@ async def recognize(websocket):
         print("Connection handler failed:", e)
     finally:
         print("Client disconnected.")
+
+
+async def main():
+    async with websockets.serve(recognize, SERVER_HOST, SERVER_PORT):
+        print(f"Server running at ws://{SERVER_HOST}:{SERVER_PORT}")
+        await asyncio.Future()
+
+if __name__ == "__main__":
+    asyncio.run(main())

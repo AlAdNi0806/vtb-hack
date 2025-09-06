@@ -41,7 +41,7 @@ async def synthesize_stream(text: str, language: str | None = None, voice: str |
     # model.generate returns 1D float tensor or numpy array
     kwargs = {}
     if language:
-        kwargs["language_id"] = language
+        kwargs["language"] = language
     if voice:
         kwargs["voice"] = voice
     # synchronous generation (may be GPU-bound)

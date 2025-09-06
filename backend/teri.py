@@ -15,6 +15,7 @@ async def tts_endpoint(websocket: WebSocket):
         while True:
             # Receive text from client (can be incremental)
             text = await websocket.receive_text()
+            print(f"Received text: {text}")
             if not text:
                 continue
 

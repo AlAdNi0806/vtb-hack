@@ -14,9 +14,11 @@ async def tts_client():
     if os.path.exists(path):
         os.remove(path)
 
+    print("starting TTS client...")
     # Open file for writing in blocks
     with sf.SoundFile(path, mode='w', samplerate=sample_rate, channels=channels, subtype='PCM_16') as f:
         async with websockets.connect(uri) as ws:
+            print("connected to server")
             text = "Привет, это тест на русском языке. Это потоковый вывод."
             await ws.send(text)
             while True:

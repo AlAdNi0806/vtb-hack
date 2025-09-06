@@ -94,7 +94,7 @@ async def process_text(websocket, text):
         logger.exception("Unexpected error")
         await websocket.send(error_msg.encode())
 
-async def handler(websocket, path):
+async def handler(websocket):
     """WebSocket connection handler"""
     client_ip = websocket.remote_address[0]
     logger.info(f"New connection from {client_ip}")

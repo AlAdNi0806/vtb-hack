@@ -2,4 +2,3 @@ numpy
 torch
 torchaudio
 websockets
-chatterbox-tts

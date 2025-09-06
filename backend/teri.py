@@ -1,107 +1,104 @@
-# server.py
-import asyncio
-import base64
-import json
-import math
-import os
-from typing import AsyncGenerator
+#!/usr/bin/env python3
+"""
+Bidirectional WebSocket -> Piper TTS streaming endpoint
+pip install fastapi uvicorn websockets asyncio aiofiles
+"""
 
-import torch
-import torchaudio
-import websockets
-from chatterbox.tts import ChatterboxTTS
-# from chatterbox.mtl_tts import ChatterboxMultilingualTTS
-  # or ChatterboxTTS
+import asyncio, json, logging, subprocess, shlex, os
+from typing import List
 
-HOST = "0.0.0.0"
-PORT = int(os.getenv("PORT", "8765"))
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-# DEVICE = "cpu"
-SAMPLE_RATE = 24000  # match model.sr after load
-CHUNK_MS = 200  # send ~200ms chunks (tweak)
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 
-# Load model once
-model = ChatterboxTTS.from_pretrained(device=DEVICE)
-# multilingual_model = ChatterboxMultilingualTTS.from_pretrained(device=DEVICE)
-SAMPLE_RATE = getattr(model, "sr", SAMPLE_RATE)
+LOG = logging.getLogger("piper_ws")
+logging.basicConfig(level=logging.INFO)
 
-# Generator that yields chunks (bytes) from full wav tensor
-def wav_to_chunks_bytes(wav_tensor: torch.Tensor, sr: int, chunk_ms: int) -> AsyncGenerator[bytes, None]:
-    # wav_tensor: (1, N) float32 tensor in [-1,1]
-    num_samples_per_chunk = int(sr * (chunk_ms / 1000.0))
-    total = wav_tensor.shape[-1]
-    idx = 0
-    while idx < total:
-        end = min(total, idx + num_samples_per_chunk)
-        chunk = wav_tensor[..., idx:end].cpu()
-        # convert to 16-bit PCM
-        chunk_int16 = (chunk * 32767.0).clamp(-32768, 32767).to(torch.int16)
-        wav_bytes = torchaudio.functional.save_to_buffer(chunk_int16.unsqueeze(0), format="wav", sample_rate=sr)
-        yield wav_bytes
-        idx = end
+# ------------------------------------------------------------------
+# CONFIG  – change paths if you cloned voices elsewhere
+# ------------------------------------------------------------------
+MODEL_PATH   = "ru_RU-dmitri-medium.onnx"
+CONFIG_PATH  = "ru_RU-dmitri-medium.onnx.json"
+SAMPLE_RATE  = 22_050
+FRAME_SIZE   = SAMPLE_RATE * 2 // 10      # 0.1 s worth of 16-bit PCM
+PIPER_CMD    = shlex.split(
+    f"piper --model {MODEL_PATH} --config {CONFIG_PATH} --output-raw"
+)
 
-async def synthesize_stream(text: str, language: str | None = None, voice: str | None = None):
-    # model.generate returns 1D float tensor or numpy array
-    # kwargs = {}
-    # if language:
-    #     kwargs["language_id"] = language
-    # if voice:
-    #     kwargs["voice"] = voice
-    # synchronous generation (may be GPU-bound)
-    wav = model.generate(text)  # returns FloatTensor [-1..1]
-    if isinstance(wav, torch.Tensor):
-        wav_t = wav
-    else:
-        wav_t = torch.from_numpy(wav).float()
-    async for chunk in wav_to_chunks_bytes(wav_t, SAMPLE_RATE, CHUNK_MS):
-        yield chunk
+# ------------------------------------------------------------------
+# Piper process wrapper (asyncio subprocess)
+# ------------------------------------------------------------------
+class PiperStreamer:
+    def __init__(self) -> None:
+        self._proc: asyncio.subprocess.Process | None = None
 
-async def handler(ws):
-    """
-    Protocol:
-      - Client sends JSON messages:
-        {"type":"synthesize","text":"Hello","language":"ru","voice":null}
-      - Server streams back binary messages containing base64-encoded WAV chunks:
-        {"type":"chunk","data":"BASE64_WAV","sr":24000}
-      - Finalization message:
-        {"type":"end"}
-      - Errors:
-        {"type":"error", "message":"..."}
-    """
+    async def start(self):
+        if self._proc is None:
+            LOG.info("Starting Piper: %s", " ".join(PIPER_CMD))
+            self._proc = await asyncio.create_subprocess_exec(
+                *PIPER_CMD,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+
+    async def synthesize(self, text: str) -> bytes:
+        """Send one sentence to Piper and return raw PCM."""
+        await self.start()
+        assert self._proc and self._proc.stdin and self._proc.stdout
+        self._proc.stdin.write((text + "\n").encode())
+        await self._proc.stdin.drain()
+
+        pcm = await self._proc.stdout.readuntil(b"\n")  # piper ends with newline
+        return pcm[:-1]  # drop newline
+
+    async def stop(self):
+        if self._proc:
+            self._proc.terminate()
+            await self._proc.wait()
+            self._proc = None
+
+
+# ------------------------------------------------------------------
+# FastAPI + WebSocket
+# ------------------------------------------------------------------
+app = FastAPI(title="PiperTTS-WS", version="1.0")
+
+class TextMsg(BaseModel):
+    text: str
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
+    piper = PiperStreamer()
+    buffer = ""                       # accumulate until sentence end
+    sentence_end = {".", "!", "?", "。"}
+
     try:
-        async for message in ws:
-            try:
-                msg = json.loads(message)
-            except Exception:
-                await ws.send(json.dumps({"type":"error", "message":"invalid json"}))
-                continue
+        while True:
+            data = await ws.receive_text()
+            msg  = TextMsg.parse_raw(data)
+            buffer += msg.text
 
-            if msg.get("type") == "synthesize":
-                text = msg.get("text", "")
-                language = msg.get("language")
-                voice = msg.get("voice")
-                # offload generate to threadpool to avoid blocking event loop
-                loop = asyncio.get_running_loop()
-                try:
-                    gen = await loop.run_in_executor(None, lambda: synthesize_stream(text, language, voice))
-                    # synthesize_stream itself is async generator; we need to iterate it.
-                    async for chunk in gen:
-                        # base64 encode bytes
-                        b64 = base64.b64encode(chunk).decode("ascii")
-                        await ws.send(json.dumps({"type":"chunk", "data": b64, "sr": SAMPLE_RATE}))
-                    await ws.send(json.dumps({"type":"end"}))
-                except Exception as e:
-                    await ws.send(json.dumps({"type":"error", "message": str(e)}))
-            else:
-                await ws.send(json.dumps({"type":"error", "message":"unknown message type"}))
-    except websockets.exceptions.ConnectionClosed:
-        return
+            # flush complete sentences
+            while True:
+                idx = max((buffer.find(sep) for sep in sentence_end), default=-1)
+                if idx == -1:
+                    break
+                sentence, buffer = buffer[:idx+1], buffer[idx+1:]
+                audio = await piper.synthesize(sentence.strip())
+                await ws.send_bytes(audio)
 
+    except WebSocketDisconnect:
+        LOG.info("Client disconnected")
+    except Exception as e:
+        LOG.exception(e)
+    finally:
+        await piper.stop()
+
+
+# ------------------------------------------------------------------
+# Run:  uvicorn app:app --host 0.0.0.0 --port 8000
+# ------------------------------------------------------------------
 if __name__ == "__main__":
-    print(f"Starting server on ws://{HOST}:{PORT} (device={DEVICE})")
-
-    async def run():
-        async with websockets.serve(handler, HOST, PORT, max_size=2**25):
-            await asyncio.Future()          # run forever
-
-    asyncio.run(run())
+    import uvicorn
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)

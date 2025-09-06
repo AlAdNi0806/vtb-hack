@@ -9,7 +9,8 @@ from typing import AsyncGenerator
 import torch
 import torchaudio
 import websockets
-from chatterbox.tts import ChatterboxMultilingualTTS  # or ChatterboxTTS
+from chatterbox.tts import ChatterboxTTS
+  # or ChatterboxTTS
 
 HOST = "0.0.0.0"
 PORT = int(os.getenv("PORT", "8765"))
@@ -18,7 +19,7 @@ SAMPLE_RATE = 24000  # match model.sr after load
 CHUNK_MS = 200  # send ~200ms chunks (tweak)
 
 # Load model once
-model = ChatterboxMultilingualTTS.from_pretrained(device=DEVICE)
+model = ChatterboxTTS.from_pretrained(device=DEVICE)
 SAMPLE_RATE = getattr(model, "sr", SAMPLE_RATE)
 
 # Generator that yields chunks (bytes) from full wav tensor

@@ -1,158 +1,156 @@
 #!/usr/bin/env python3
 """
-Self-contained WebSocket -> Piper TTS streaming endpoint
-- downloads piper binary + ru voice on first run
-- caches in ./piper_cache/
-- MIT licenced
+Piper TTS WebSocket Server
+==========================
+A single-file WebSocket server that converts text to Russian speech using Piper TTS.
+
+Features:
+- Accepts text via WebSocket connection
+- Streams back raw PCM audio in real-time (16-bit mono PCM) [[6]]
+- Supports Russian language with appropriate model
+- Simple implementation requiring only standard libraries
+
+Setup Requirements:
+1. Install Piper TTS: https://pypi.org/project/piper-tts/
+2. Download a Russian model (e.g., 'ru_RU-embed-ruslan-medium.onnx')
+   - Models can be found at: https://huggingface.co/rhasspy/piper-voices/tree/tacotron2
+3. Place this script in your project directory
+
+Usage:
+1. Save this file as piper_websocket.py
+2. Make executable: chmod +x piper_websocket.py
+3. Run: ./piper_websocket.py
+4. Connect to ws://localhost:8765 with a WebSocket client
+
+Client Notes:
+- The audio returned is raw 16-bit mono PCM, NOT WAV format [[4]]
+- Sample rate matches the voice model (typically 22050 Hz)
+- You'll need to handle audio playback with correct parameters on the client side
 """
 
-import os
 import asyncio
-import logging
-import json
-import stat
+import websockets
 import subprocess
-import shutil
-from pathlib import Path
-from typing import Optional
+import os
+import sys
+import logging
 
-import aiohttp
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
-
-LOG = logging.getLogger("piper_ws")
-logging.basicConfig(level=logging.INFO)
-
-# ------------------------------------------------------------------
-# CONFIG – cachedir inside repo (Modal writable)
-# ------------------------------------------------------------------
-CACHE_DIR   = Path(__file__).with_name("piper_cache")
-PIPER_BIN   = CACHE_DIR / "piper"
-VOICE_DIR   = CACHE_DIR / "voices"
-MODEL_PATH  = VOICE_DIR / "ru_RU-dmitri-medium.onnx"
-CONFIG_PATH = VOICE_DIR / "ru_RU-dmitri-medium.onnx.json"
-SAMPLE_RATE = 22_050
-
-# URLs (official releases)
-PIPER_URL = (
-    "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_amd64.tar.gz"
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
 )
-VOICE_URL = (
-    "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/dmitri/medium/"
-)
+logger = logging.getLogger('piper-websocket')
 
-# ------------------------------------------------------------------
-# One-time bootstrap
-# ------------------------------------------------------------------
-async def download_once(url: str, dest: Path, session: aiohttp.ClientSession) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
-        return
-    LOG.info("Downloading %s -> %s", url, dest)
-    async with session.get(url) as resp:
-        resp.raise_for_status()
-        with dest.open("wb") as f:
-            async for chunk in resp.content.iter_chunked(8192):
-                f.write(chunk)
+# Configuration - CHANGE THESE VALUES ACCORDING TO YOUR SETUP
+PIPER_MODEL = "ru_RU-embed-ruslan-medium.onnx"  # Path to your Russian model file
+PIPER_PATH = "piper"  # Path to piper executable (use full path if not in PATH)
+HOST = "0.0.0.0"  # Listen on all interfaces
+PORT = 8765  # WebSocket port
+PCM_CHUNK_SIZE = 4096  # Size of audio chunks to stream
 
-async def bootstrap() -> None:
-    global PIPER_BIN
-    async with aiohttp.ClientSession() as session:
-        # 1. download & unpack to cache
-        tgz = CACHE_DIR / "piper.tgz"
-        await download_once(PIPER_URL, tgz, session)
-        unpacked = CACHE_DIR / "piper"
-        if not unpacked.exists():
-            shutil.unpack_archive(str(tgz), extract_dir=CACHE_DIR)
-
-        # 2. locate the actual binary (tar gives us a directory with 'piper' inside)
-        bin_inside = unpacked / "piper"
-        if not bin_inside.exists():
-            bin_inside = unpacked / "piper.exe"  # windows fallback
-        exec_bin = Path("/tmp/piper")
-        if not exec_bin.exists():
-            shutil.copy2(bin_inside, exec_bin)
-            exec_bin.chmod(0o755)
-        PIPER_BIN = exec_bin
-
-        # 3. voices
-        for fname in (MODEL_PATH.name, CONFIG_PATH.name):
-            await download_once(VOICE_URL + fname, VOICE_DIR / fname, session)
-
-# ------------------------------------------------------------------
-# Piper wrapper (unchanged except paths)
-# ------------------------------------------------------------------
-class PiperStreamer:
-    def __init__(self) -> None:
-        self._proc: Optional[asyncio.subprocess.Process] = None
-
-    async def start(self):
-        if self._proc is None:
-            await bootstrap()   # idempotent
-            LOG.info("Starting Piper: %s", PIPER_BIN)
-            self._proc = await asyncio.create_subprocess_exec(
-                str(PIPER_BIN),
-                "--model", str(MODEL_PATH),
-                "--config", str(CONFIG_PATH),
-                "--output-raw",
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-
-    async def synthesize(self, text: str) -> bytes:
-        await self.start()
-        assert self._proc and self._proc.stdin and self._proc.stdout
-        self._proc.stdin.write((text + "\n").encode())
-        await self._proc.stdin.drain()
-        pcm = await self._proc.stdout.readuntil(b"\n")
-        return pcm[:-1]
-
-    async def stop(self):
-        if self._proc:
-            self._proc.terminate()
-            await self._proc.wait()
-            self._proc = None
-
-# ------------------------------------------------------------------
-# FastAPI WebSocket
-# ------------------------------------------------------------------
-app = FastAPI(title="PiperTTS-WS-Standalone", version="1.0")
-
-class TextMsg(BaseModel):
-    text: str
-
-@app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
-    await ws.accept()
-    piper = PiperStreamer()
-    buffer = ""
-    sentence_end = {".", "!", "?", "。"}
-
+async def process_text(websocket, text):
+    """Process text through Piper and stream audio back"""
     try:
+        # Start Piper process with raw output
+        process = await asyncio.create_subprocess_exec(
+            PIPER_PATH,
+            "--model", PIPER_MODEL,
+            "--output-raw",  # Output raw PCM audio instead of WAV [[6]]
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        
+        logger.info(f"Processing text: '{text}'")
+        
+        # Send text to Piper
+        process.stdin.write(text.encode() + b'\n')
+        await process.stdin.drain()
+        process.stdin.close()
+        
+        # Stream audio back in chunks
         while True:
-            data = await ws.receive_text()
-            msg = TextMsg.parse_raw(data)
-            buffer += msg.text
-
-            while True:
-                idx = max((buffer.find(sep) for sep in sentence_end), default=-1)
-                if idx == -1:
-                    break
-                sentence, buffer = buffer[: idx + 1], buffer[idx + 1 :]
-                audio = await piper.synthesize(sentence.strip())
-                await ws.send_bytes(audio)
-
-    except WebSocketDisconnect:
-        LOG.info("Client disconnected")
+            chunk = await process.stdout.read(PCM_CHUNK_SIZE)
+            if not chunk:
+                break
+            await websocket.send(chunk)
+        
+        # Wait for process to complete
+        await process.wait()
+        
+        if process.returncode != 0:
+            error = (await process.stderr.read()).decode()
+            logger.error(f"Piper error: {error}")
+            await websocket.send(f"ERROR: Piper exited with code {process.returncode}".encode())
+            
+    except FileNotFoundError:
+        error_msg = "ERROR: Piper executable not found. Please install Piper TTS and ensure it's in your PATH."
+        logger.error(error_msg)
+        await websocket.send(error_msg.encode())
     except Exception as e:
-        LOG.exception(e)
-    finally:
-        await piper.stop()
+        error_msg = f"ERROR: {str(e)}"
+        logger.exception("Unexpected error")
+        await websocket.send(error_msg.encode())
 
-# ------------------------------------------------------------------
-# Entry-point
-# ------------------------------------------------------------------
+async def handler(websocket, path):
+    """WebSocket connection handler"""
+    client_ip = websocket.remote_address[0]
+    logger.info(f"New connection from {client_ip}")
+    
+    try:
+        async for message in websocket:
+            # Process incoming text message
+            await process_text(websocket, message)
+    except websockets.exceptions.ConnectionClosed as e:
+        logger.info(f"Connection closed: {e}")
+    except Exception as e:
+        logger.exception("Connection error")
+        try:
+            await websocket.send(f"ERROR: {str(e)}".encode())
+        except:
+            pass
+
+async def main():
+    """Start the WebSocket server"""
+    try:
+        # Verify Piper is available
+        process = await asyncio.create_subprocess_exec(
+            PIPER_PATH, "--help",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        await process.communicate()
+        
+        if process.returncode != 0:
+            logger.error("Piper executable not found or not working. Please check your installation.")
+            return
+            
+        # Start server
+        server = await websockets.serve(
+            handler,
+            HOST,
+            PORT,
+            ping_interval=None,  # Disable pings for uninterrupted audio streaming
+            max_size=None        # Allow large messages
+        )
+        
+        logger.info(f"Piper WebSocket server running at ws://{HOST}:{PORT}")
+        logger.info(f"Using model: {PIPER_MODEL}")
+        logger.info("Connect with a WebSocket client to send text and receive PCM audio")
+        
+        # Keep server running
+        await server.wait_closed()
+        
+    except Exception as e:
+        logger.exception("Failed to start server")
+        print(f"Error starting server: {e}")
+        print("\nSetup instructions:")
+        print("1. Install Piper: pip install piper-tts")
+        print("2. Download a Russian model (e.g., ru_RU-embed-ruslan-medium.onnx)")
+        print("3. Update PIPER_MODEL in this script to point to your model file")
+        print("4. Ensure Piper is in your PATH or update PIPER_PATH")
+
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("teri:app", host="0.0.0.0", port=8000, reload=True)
+    asyncio.run(main())

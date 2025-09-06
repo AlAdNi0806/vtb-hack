@@ -53,7 +53,7 @@ async def synthesize_stream(text: str, language: str | None = None, voice: str |
     async for chunk in wav_to_chunks_bytes(wav_t, SAMPLE_RATE, CHUNK_MS):
         yield chunk
 
-async def handler(ws, path):
+async def handler(ws):
     """
     Protocol:
       - Client sends JSON messages:

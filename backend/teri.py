@@ -1,23 +1,33 @@
-import aiohttp
-from pipecat.services.piper.tts import PiperTTSService
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.task import PipelineTask
-from pipecat.pipeline.runner import PipelineRunner
+from fastapi import FastAPI, WebSocket
+from piper.voice import PiperVoice
+import re  # For sentence splitting
 
-# Setup session and service (assume Piper server running at http://localhost:5000/api/tts)
-session = aiohttp.ClientSession()
-tts = PiperTTSService(
-    base_url="http://localhost:5000/api/tts",
-    aiohttp_session=session,
-    voice="ru_RU-diana-medium",  # Russian voice
-    sample_rate=22050
-)
+app = FastAPI()
 
-# Example pipeline for streaming TTS (integrate with STT/LLM for bidirectional)
-pipeline = Pipeline([tts])  # Add input/LLM/output as needed
-task = PipelineTask(pipeline)
-runner = PipelineRunner()
+# Load Piper model (do this once at startup)
+MODEL_PATH = "./voices/ru_RU-diana-medium.onnx"  # Path to your .onnx file
+voice = PiperVoice.load(MODEL_PATH)
 
-# Run with text input
-await task.queue_frame(TextFrame("Это потоковый тест на русском."))
-await runner.run(task)
+@app.websocket("/tts")
+async def tts_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            # Receive text from client (can be incremental)
+            text = await websocket.receive_text()
+            if not text:
+                continue
+
+            # Split into sentences for progressive streaming (optional but improves real-time feel)
+            sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|\!)\s', text)
+
+            for sentence in sentences:
+                if sentence.strip():
+                    # Stream audio chunks from Piper
+                    for audio_bytes in voice.synthesize_stream_raw(sentence):
+                        # Send raw PCM bytes to client
+                        await websocket.send_bytes(audio_bytes)
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        await websocket.close()

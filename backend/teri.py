@@ -1,31 +1,21 @@
 #!/usr/bin/env python3
 """
-Piper TTS WebSocket Server
-==========================
-A single-file WebSocket server that converts text to Russian speech using Piper TTS.
+Piper TTS WebSocket Server (FIXED MODEL PATH)
+================================================
+Fixed version that properly locates the Russian voice model.
 
-Features:
-- Accepts text via WebSocket connection
-- Streams back raw PCM audio in real-time (16-bit mono PCM) [[6]]
-- Supports Russian language with appropriate model
-- Simple implementation requiring only standard libraries
+Key Fixes:
+- Uses absolute path resolution for model files
+- Checks if model exists before starting
+- Provides clear setup instructions when model is missing
+- Works with both relative and absolute paths
 
-Setup Requirements:
-1. Install Piper TTS: https://pypi.org/project/piper-tts/
-2. Download a Russian model (e.g., 'ru_RU-embed-ruslan-medium.onnx')
-   - Models can be found at: https://huggingface.co/rhasspy/piper-voices/tree/tacotron2
-3. Place this script in your project directory
-
-Usage:
-1. Save this file as piper_websocket.py
-2. Make executable: chmod +x piper_websocket.py
-3. Run: ./piper_websocket.py
-4. Connect to ws://localhost:8765 with a WebSocket client
-
-Client Notes:
-- The audio returned is raw 16-bit mono PCM, NOT WAV format [[4]]
-- Sample rate matches the voice model (typically 22050 Hz)
-- You'll need to handle audio playback with correct parameters on the client side
+Setup Instructions:
+1. Install Piper TTS: pip install piper-tts
+2. Download Russian model files:
+   - https://huggingface.co/rhasspy/piper-voices/resolve/tacotron2/v1/ru_RU/ru_RU-embed-ruslan-medium.onnx
+   - https://huggingface.co/rhasspy/piper-voices/resolve/tacotron2/v1/ru_RU/ru_RU-embed-ruslan-medium.onnx.json
+3. Place both files in the same directory as this script (or update PIPER_MODEL path)
 """
 
 import asyncio
@@ -43,12 +33,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger('piper-websocket')
 
-# Configuration - CHANGE THESE VALUES ACCORDING TO YOUR SETUP
-PIPER_MODEL = "ru_RU-embed-ruslan-medium.onnx"  # Path to your Russian model file
-PIPER_PATH = "piper"  # Path to piper executable (use full path if not in PATH)
+# Configuration - FIXED MODEL PATH HANDLING
+# Place your model files in the same directory as this script
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PIPER_MODEL = os.path.join(SCRIPT_DIR, "ru_RU-embed-ruslan-medium.onnx")  # Absolute path
+PIPER_PATH = "piper"  # Path to piper executable
 HOST = "0.0.0.0"  # Listen on all interfaces
 PORT = 8765  # WebSocket port
 PCM_CHUNK_SIZE = 4096  # Size of audio chunks to stream
+
+def verify_model():
+    """Verify model files exist and are accessible"""
+    # Check if model file exists
+    if not os.path.exists(PIPER_MODEL):
+        logger.error(f"Model file not found: {PIPER_MODEL}")
+        logger.error("Please download the Russian model files:")
+        logger.error("1. https://huggingface.co/rhasspy/piper-voices/resolve/tacotron2/v1/ru_RU/ru_RU-embed-ruslan-medium.onnx")
+        logger.error("2. https://huggingface.co/rhasspy/piper-voices/resolve/tacotron2/v1/ru_RU/ru_RU-embed-ruslan-medium.onnx.json")
+        logger.error(f"Place both files in: {SCRIPT_DIR}")
+        return False
+    
+    # Check if JSON metadata file exists
+    json_path = PIPER_MODEL.replace(".onnx", ".onnx.json")
+    if not os.path.exists(json_path):
+        logger.error(f"Model metadata not found: {json_path}")
+        logger.error("Please download the matching .json file for the model")
+        return False
+    
+    return True
 
 async def process_text(websocket, text):
     """Process text through Piper and stream audio back"""
@@ -57,7 +69,7 @@ async def process_text(websocket, text):
         process = await asyncio.create_subprocess_exec(
             PIPER_PATH,
             "--model", PIPER_MODEL,
-            "--output-raw",  # Output raw PCM audio instead of WAV [[6]]
+            "--output-raw",  # Output raw PCM audio instead of WAV
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
@@ -94,7 +106,7 @@ async def process_text(websocket, text):
         logger.exception("Unexpected error")
         await websocket.send(error_msg.encode())
 
-async def handler(websocket):
+async def handler(websocket, path):
     """WebSocket connection handler"""
     client_ip = websocket.remote_address[0]
     logger.info(f"New connection from {client_ip}")
@@ -115,6 +127,11 @@ async def handler(websocket):
 async def main():
     """Start the WebSocket server"""
     try:
+        # Verify model files exist
+        if not verify_model():
+            logger.error("Server cannot start without valid model files")
+            return
+            
         # Verify Piper is available
         process = await asyncio.create_subprocess_exec(
             PIPER_PATH, "--help",
@@ -146,11 +163,6 @@ async def main():
     except Exception as e:
         logger.exception("Failed to start server")
         print(f"Error starting server: {e}")
-        print("\nSetup instructions:")
-        print("1. Install Piper: pip install piper-tts")
-        print("2. Download a Russian model (e.g., ru_RU-embed-ruslan-medium.onnx)")
-        print("3. Update PIPER_MODEL in this script to point to your model file")
-        print("4. Ensure Piper is in your PATH or update PIPER_PATH")
 
 if __name__ == "__main__":
     asyncio.run(main())

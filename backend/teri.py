@@ -56,19 +56,21 @@ async def download_once(url: str, dest: Path, session: aiohttp.ClientSession) ->
                 f.write(chunk)
 
 async def bootstrap() -> None:
+    global PIPER_BIN          # move global to the top
     async with aiohttp.ClientSession() as session:
         # 1. download & unpack to cache
         tgz = CACHE_DIR / "piper.tgz"
         await download_once(PIPER_URL, tgz, session)
         if not PIPER_BIN.exists():
             shutil.unpack_archive(str(tgz), extract_dir=CACHE_DIR)
+
         # 2. copy to /tmp so it can be executed
         exec_bin = Path("/tmp/piper")
         if not exec_bin.exists():
             shutil.copy2(PIPER_BIN, exec_bin)
             exec_bin.chmod(0o755)
-        global PIPER_BIN
-        PIPER_BIN = exec_bin
+        PIPER_BIN = exec_bin     # now safe to re-point
+
         # 3. voices
         for fname in (MODEL_PATH.name, CONFIG_PATH.name):
             await download_once(VOICE_URL + fname, VOICE_DIR / fname, session)

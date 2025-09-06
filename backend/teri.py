@@ -96,6 +96,9 @@ async def handler(ws, path):
 
 if __name__ == "__main__":
     print(f"Starting server on ws://{HOST}:{PORT} (device={DEVICE})")
-    start = websockets.serve(handler, HOST, PORT, max_size=2**25)
-    asyncio.get_event_loop().run_until_complete(start)
-    asyncio.get_event_loop().run_forever()
+
+    async def run():
+        async with websockets.serve(handler, HOST, PORT, max_size=2**25):
+            await asyncio.Future()          # run forever
+
+    asyncio.run(run())

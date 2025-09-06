@@ -5,7 +5,7 @@ import re  # For sentence splitting
 app = FastAPI()
 
 # Load Piper model (do this once at startup)
-MODEL_PATH = "./voices/ru/ru_RU-medium.onnx"  # Path to your .onnx file
+MODEL_PATH = "./voices/ru/ru_RU-russian-medium.onnx"  # Path to your .onnx file
 voice = PiperVoice.load(MODEL_PATH)
 
 @app.websocket("/tts")

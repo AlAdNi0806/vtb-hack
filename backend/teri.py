@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
 """
-Bidirectional WebSocket -> Piper TTS streaming endpoint
-pip install fastapi uvicorn websockets asyncio aiofiles
+Self-contained WebSocket -> Piper TTS streaming endpoint
+- downloads piper binary + ru voice on first run
+- caches in ./piper_cache/
+- MIT licenced
 """
 
-import asyncio, json, logging, subprocess, shlex, os
-from typing import List
+import os
+import asyncio
+import logging
+import json
+import stat
+import subprocess
+import shutil
+from pathlib import Path
+from typing import Optional
 
+import aiohttp
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
@@ -14,42 +24,78 @@ LOG = logging.getLogger("piper_ws")
 logging.basicConfig(level=logging.INFO)
 
 # ------------------------------------------------------------------
-# CONFIG  – change paths if you cloned voices elsewhere
+# CONFIG – cachedir inside repo (Modal writable)
 # ------------------------------------------------------------------
-MODEL_PATH   = "ru_RU-dmitri-medium.onnx"
-CONFIG_PATH  = "ru_RU-dmitri-medium.onnx.json"
-SAMPLE_RATE  = 22_050
-FRAME_SIZE   = SAMPLE_RATE * 2 // 10      # 0.1 s worth of 16-bit PCM
-PIPER_CMD    = shlex.split(
-    f"piper --model {MODEL_PATH} --config {CONFIG_PATH} --output-raw"
+CACHE_DIR   = Path(__file__).with_name("piper_cache")
+PIPER_BIN   = CACHE_DIR / "piper"
+VOICE_DIR   = CACHE_DIR / "voices"
+MODEL_PATH  = VOICE_DIR / "ru_RU-dmitri-medium.onnx"
+CONFIG_PATH = VOICE_DIR / "ru_RU-dmitri-medium.onnx.json"
+SAMPLE_RATE = 22_050
+
+# URLs (official releases)
+PIPER_URL = (
+    "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_amd64.tar.gz"
+)
+VOICE_URL = (
+    "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/dmitri/medium/"
 )
 
 # ------------------------------------------------------------------
-# Piper process wrapper (asyncio subprocess)
+# One-time bootstrap
+# ------------------------------------------------------------------
+async def download_once(url: str, dest: Path, session: aiohttp.ClientSession) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        return
+    LOG.info("Downloading %s -> %s", url, dest)
+    async with session.get(url) as resp:
+        resp.raise_for_status()
+        with dest.open("wb") as f:
+            async for chunk in resp.content.iter_chunked(8192):
+                f.write(chunk)
+
+async def bootstrap() -> None:
+    async with aiohttp.ClientSession() as session:
+        # 1. binary
+        tgz = CACHE_DIR / "piper.tgz"
+        await download_once(PIPER_URL, tgz, session)
+        if not PIPER_BIN.exists():
+            shutil.unpack_archive(str(tgz), extract_dir=CACHE_DIR)
+            # make executable
+            PIPER_BIN.chmod(PIPER_BIN.stat().st_mode | stat.S_IEXEC)
+        # 2. voice
+        for fname in (MODEL_PATH.name, CONFIG_PATH.name):
+            await download_once(VOICE_URL + fname, VOICE_DIR / fname, session)
+
+# ------------------------------------------------------------------
+# Piper wrapper (unchanged except paths)
 # ------------------------------------------------------------------
 class PiperStreamer:
     def __init__(self) -> None:
-        self._proc: asyncio.subprocess.Process | None = None
+        self._proc: Optional[asyncio.subprocess.Process] = None
 
     async def start(self):
         if self._proc is None:
-            LOG.info("Starting Piper: %s", " ".join(PIPER_CMD))
+            await bootstrap()   # idempotent
+            LOG.info("Starting Piper: %s", PIPER_BIN)
             self._proc = await asyncio.create_subprocess_exec(
-                *PIPER_CMD,
+                str(PIPER_BIN),
+                "--model", str(MODEL_PATH),
+                "--config", str(CONFIG_PATH),
+                "--output-raw",
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )
 
     async def synthesize(self, text: str) -> bytes:
-        """Send one sentence to Piper and return raw PCM."""
         await self.start()
         assert self._proc and self._proc.stdin and self._proc.stdout
         self._proc.stdin.write((text + "\n").encode())
         await self._proc.stdin.drain()
-
-        pcm = await self._proc.stdout.readuntil(b"\n")  # piper ends with newline
-        return pcm[:-1]  # drop newline
+        pcm = await self._proc.stdout.readuntil(b"\n")
+        return pcm[:-1]
 
     async def stop(self):
         if self._proc:
@@ -57,11 +103,10 @@ class PiperStreamer:
             await self._proc.wait()
             self._proc = None
 
-
 # ------------------------------------------------------------------
-# FastAPI + WebSocket
+# FastAPI WebSocket
 # ------------------------------------------------------------------
-app = FastAPI(title="PiperTTS-WS", version="1.0")
+app = FastAPI(title="PiperTTS-WS-Standalone", version="1.0")
 
 class TextMsg(BaseModel):
     text: str
@@ -70,21 +115,20 @@ class TextMsg(BaseModel):
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     piper = PiperStreamer()
-    buffer = ""                       # accumulate until sentence end
+    buffer = ""
     sentence_end = {".", "!", "?", "。"}
 
     try:
         while True:
             data = await ws.receive_text()
-            msg  = TextMsg.parse_raw(data)
+            msg = TextMsg.parse_raw(data)
             buffer += msg.text
 
-            # flush complete sentences
             while True:
                 idx = max((buffer.find(sep) for sep in sentence_end), default=-1)
                 if idx == -1:
                     break
-                sentence, buffer = buffer[:idx+1], buffer[idx+1:]
+                sentence, buffer = buffer[: idx + 1], buffer[idx + 1 :]
                 audio = await piper.synthesize(sentence.strip())
                 await ws.send_bytes(audio)
 
@@ -95,9 +139,8 @@ async def websocket_endpoint(ws: WebSocket):
     finally:
         await piper.stop()
 
-
 # ------------------------------------------------------------------
-# Run:  uvicorn app:app --host 0.0.0.0 --port 8000
+# Entry-point
 # ------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn

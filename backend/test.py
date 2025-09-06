@@ -1,33 +1,41 @@
-# client.py
-import asyncio
-import base64
-import json
-import os
+#!/usr/bin/env python3
+"""
+Minimal client: streams text → server, accumulates audio, saves .wav
+"""
+
+import asyncio, json, wave
 import websockets
-import sounddevice as sd
-import soundfile as sf
-import io
+import numpy as np
 
-WS_URL = os.getenv("WS_URL", "ws://192.168.0.176:8765")
+URI = "ws://192.168.0.176:8000/ws"
+TEXT = (
+    "Привет! Это пример реального времени. "
+    "Мы говорим с сервером Пайпер и сохраняем ответ в файл."
+)
 
-async def run():
-    async with websockets.connect(WS_URL, max_size=2**25) as ws:
-        req = {"type":"synthesize","text":"Привет, как дела?"}
-        await ws.send(json.dumps(req))
-        while True:
-            msg = await ws.recv()
-            obj = json.loads(msg)
-            if obj["type"] == "chunk":
-                b = base64.b64decode(obj["data"])
-                # read wav bytes and play
-                data, sr = sf.read(io.BytesIO(b))
-                sd.play(data, sr)
-                sd.wait()
-            elif obj["type"] == "end":
-                print("done")
-                break
-            elif obj["type"] == "error":
-                print("error:", obj.get("message"))
-                break
+async def record() -> list[bytes]:
+    """Return list of raw 16-bit 22 kHz PCM chunks."""
+    chunks: list[bytes] = []
+    async with websockets.connect(URI) as ws:
+        await ws.send(json.dumps({"text": TEXT}))
+        async for msg in ws:
+            if isinstance(msg, bytes):        # audio chunk
+                chunks.append(msg)
+            else:                             # future JSON control
+                print("ctrl:", msg)
+    return chunks
 
-asyncio.run(run())
+def save_wav(chunks: list[bytes], path: str = "output.wav", sr: int = 22_050):
+    """Glue chunks and write 16-bit mono .wav"""
+    pcm = b"".join(chunks)
+    audio = np.frombuffer(pcm, dtype=np.int16)
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(audio.tobytes())
+    print(f"saved {path}  ({len(audio)/sr:.2f} s)")
+
+if __name__ == "__main__":
+    chunks = asyncio.run(record())
+    save_wav(chunks)

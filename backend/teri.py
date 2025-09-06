@@ -15,7 +15,8 @@ from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 
 HOST = "0.0.0.0"
 PORT = int(os.getenv("PORT", "8765"))
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+# DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DEVICE = "cpu"
 SAMPLE_RATE = 24000  # match model.sr after load
 CHUNK_MS = 200  # send ~200ms chunks (tweak)
 

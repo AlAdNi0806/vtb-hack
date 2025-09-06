@@ -12,7 +12,7 @@ WS_URL = os.getenv("WS_URL", "ws://192.168.0.176:8765")
 
 async def run():
     async with websockets.connect(WS_URL, max_size=2**25) as ws:
-        req = {"type":"synthesize","text":"Привет, как дела?","language":"ru"}
+        req = {"type":"synthesize","text":"Привет, как дела?"}
         await ws.send(json.dumps(req))
         while True:
             msg = await ws.recv()

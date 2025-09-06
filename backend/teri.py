@@ -10,19 +10,19 @@ import torch
 import torchaudio
 import websockets
 from chatterbox.tts import ChatterboxTTS
-from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+# from chatterbox.mtl_tts import ChatterboxMultilingualTTS
   # or ChatterboxTTS
 
 HOST = "0.0.0.0"
 PORT = int(os.getenv("PORT", "8765"))
-# DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DEVICE = "cpu"
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+# DEVICE = "cpu"
 SAMPLE_RATE = 24000  # match model.sr after load
 CHUNK_MS = 200  # send ~200ms chunks (tweak)
 
 # Load model once
 model = ChatterboxTTS.from_pretrained(device=DEVICE)
-multilingual_model = ChatterboxMultilingualTTS.from_pretrained(device=DEVICE)
+# multilingual_model = ChatterboxMultilingualTTS.from_pretrained(device=DEVICE)
 SAMPLE_RATE = getattr(model, "sr", SAMPLE_RATE)
 
 # Generator that yields chunks (bytes) from full wav tensor
@@ -42,13 +42,13 @@ def wav_to_chunks_bytes(wav_tensor: torch.Tensor, sr: int, chunk_ms: int) -> Asy
 
 async def synthesize_stream(text: str, language: str | None = None, voice: str | None = None):
     # model.generate returns 1D float tensor or numpy array
-    kwargs = {}
-    if language:
-        kwargs["language_id"] = language
-    if voice:
-        kwargs["voice"] = voice
+    # kwargs = {}
+    # if language:
+    #     kwargs["language_id"] = language
+    # if voice:
+    #     kwargs["voice"] = voice
     # synchronous generation (may be GPU-bound)
-    wav = multilingual_model.generate(text, **kwargs)  # returns FloatTensor [-1..1]
+    wav = model.generate(text)  # returns FloatTensor [-1..1]
     if isinstance(wav, torch.Tensor):
         wav_t = wav
     else:

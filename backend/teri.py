@@ -42,7 +42,7 @@ def wav_to_chunks_bytes(wav_tensor: torch.Tensor, sr: int, chunk_ms: int) -> Asy
 
 async def synthesize_stream(text: str, language: str | None = None, voice: str | None = None):
     # model.generate returns 1D float tensor or numpy array
-    kwargs = []
+    kwargs = {}
     if language:
         kwargs["language_id"] = language
     if voice:
